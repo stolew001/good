@@ -1,0 +1,195 @@
+name: Build A4 Dewarp Scanner APK & AAB
+​on:
+push:
+branches: [ main, master ]
+workflow_dispatch:
+​jobs:
+build-android:
+runs-on: ubuntu-latest
+​steps:
+- name: 1. 檢出儲存庫 (Checkout)
+uses: actions/checkout@v4
+​- name: 2. 設定 Java 17 環境 (Setup JDK 17)
+uses: actions/setup-java@v4
+with:
+distribution: 'temurin'
+java-version: '17'
+​- name: 3. 設定 Gradle 編譯工具 (Setup Gradle)
+uses: gradle/actions/setup-gradle@v3
+with:
+gradle-version: '8.7'
+​- name: 4. 自動生成金鑰與 Android 專案原始碼
+run: |
+mkdir -p app/src/main/java/com/a4scanner/dewarp
+mkdir -p app/src/main/res/xml
+mkdir -p app/src/main/res/values
+​# 產生簽名金鑰 (讓編譯出的 APK 可直接安裝於手機，AAB 可用於測試上架)
+keytool -genkey -v 
+-keystore release-key.jks 
+-alias a4scanner 
+-keyalg RSA 
+-keysize 2048 
+-validity 10000 
+-storepass android123 
+-keypass android123 
+-dname "CN=A4Scanner, OU=Mobile, O=A4Scanner, L=HK, S=HK, C=HK"
+​cat << 'EOF' > settings.gradle
+pluginManagement {
+repositories {
+google()
+mavenCentral()
+gradlePluginPortal()
+}
+}
+dependencyResolutionManagement {
+repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+repositories {
+google()
+mavenCentral()
+}
+}
+rootProject.name = "A4DewarpScanner"
+include(":app")
+EOF
+​cat << 'EOF' > gradle.properties
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+kotlin.code.style=official
+EOF
+​cat << 'EOF' > build.gradle
+plugins {
+id 'com.android.application' version '8.4.0' apply false
+id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+}
+EOF
+​cat << 'EOF' > app/build.gradle
+plugins {
+id 'com.android.application'
+id 'org.jetbrains.kotlin.android'
+}
+​android {
+namespace 'com.a4scanner.dewarp'
+compileSdk 34
+​defaultConfig {
+applicationId "com.a4scanner.dewarp"
+minSdk 24
+targetSdk 34
+versionCode 1
+versionName "1.0.0"
+}
+​signingConfigs {
+release {
+storeFile file("../release-key.jks")
+storePassword "android123"
+keyAlias "a4scanner"
+keyPassword "android123"
+}
+}
+​buildTypes {
+release {
+signingConfig signingConfigs.release
+minifyEnabled false
+}
+}
+​compileOptions {
+sourceCompatibility JavaVersion.VERSION_17
+targetCompatibility JavaVersion.VERSION_17
+}
+​kotlinOptions {
+jvmTarget = '17'
+}
+}
+​dependencies {
+implementation 'androidx.core:core-ktx:1.12.0'
+}
+EOF
+​cat << 'EOF' > app/src/main/res/xml/file_paths.xml
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+<cache-path name="camera_photos" path="." />
+</paths>
+EOF
+​cat << 'EOF' > app/src/main/AndroidManifest.xml
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+​<application
+android:allowBackup="true"
+android:label="A4 捲曲拉平掃描器"
+android:supportsRtl="true"
+android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+​<activity
+android:name=".MainActivity"
+android:exported="true"
+android:screenOrientation="portrait">
+<intent-filter>
+<action android:name="android.intent.action.MAIN" />
+<category android:name="android.intent.category.LAUNCHER" />
+</intent-filter>
+</activity>
+​<provider
+android:name="androidx.core.content.FileProvider"
+android:authorities="${applicationId}.fileprovider"
+android:exported="false"
+android:grantUriPermissions="true">
+<meta-data
+android:name="android.support.FILE_PROVIDER_PATHS"
+android:resource="@xml/file_paths" />
+</provider>
+</application>
+</manifest>
+EOF
+​cat << 'EOF' > app/src/main/java/com/a4scanner/dewarp/MainActivity.kt
+package com.a4scanner.dewarp
+​import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.graphics.*
+import android.graphics.pdf.PdfDocument
+import android.net.Uri
+import android.os.Bundle
+import android.provider.MediaStore
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.widget.*
+import androidx.core.content.FileProvider
+import java.io.File
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
+​class MainActivity : Activity() {
+​private lateinit var cropView: A4CurveOverlayView
+private lateinit var statusText: TextView
+private lateinit var btnPreviewToggle: Button
+private lateinit var btnFilterToggle: Button
+private lateinit var btnAxisToggle: Button
+​private var sourceBitmap: Bitmap? = null
+private var dewarpedBitmap: Bitmap? = null
+private var cameraImageUri: Uri? = null
+​private var isPreviewMode = false
+// 0 = 原色, 1 = 文件增亮, 2 = 黑白高對比
+private var filterMode = 1
+​companion object {
+private const val REQ_PICK_IMAGE = 1001
+private const val REQ_TAKE_PHOTO = 1002
+private const val REQ_SAVE_PDF = 1003
+​// 標準 A4 比例 (1 : 1.4142) 輸出解析度
+private const val A4_WIDTH = 1414
+private const val A4_HEIGHT = 2000
+}
+​override fun onCreate(savedInstanceState: Bundle?) {
+super.onCreate(savedInstanceState)
+​val root = LinearLayout(this).apply {
+orientation = LinearLayout.VERTICAL
+setBackgroundColor(Color.parseColor("#121212"))
+}
+​// 頂部標題與提示列
+statusText = TextView(this).apply {
+text = "請拍照或選擇相片，拖曳 4 個角點與 2 個弧線中點貼合 A4 紙邊緣"
+setTextColor(Color.WHITE)
+textSize = 14f
+setPadding(32, 28, 32, 20)
+setBackgroundColor(Color.parseColor("#1E1E1E"))
+}
+root.addView(s
