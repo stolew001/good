@@ -70,8 +70,8 @@ jobs:
                   applicationId "com.example.a4scanner"
                   minSdk 24
                   targetSdk 34
-                  versionCode 7
-                  versionName "2.3"
+                  versionCode 8
+                  versionName "2.4"
               }
 
               buildTypes {
@@ -206,7 +206,7 @@ jobs:
                   btnRotate.setText("旋轉 90°");
                   btnRotate.setOnClickListener(v -> {
                       if (dewarpView.sourceBitmap != null) {
-                          dewarpView.rotateImage();
+                          dewarpView.rotateImageSafely();
                       }
                   });
 
@@ -215,22 +215,28 @@ jobs:
                       if (currentState == 0) {
                           pickImages();
                       } else if (currentState == 1) {
-                          // 生成預覽
                           Toast.makeText(this, "產生預覽中...", Toast.LENGTH_SHORT).show();
                           btnMainAction.setEnabled(false);
                           btnRotate.setEnabled(false);
                           
                           new Thread(() -> {
-                              previewBitmap = dewarpView.processDewarp(true);
-                              runOnUiThread(() -> {
-                                  btnMainAction.setEnabled(true);
-                                  currentState = 2;
-                                  dewarpView.showingPreview = true;
-                                  updateUI();
-                              });
+                              try {
+                                  previewBitmap = dewarpView.processDewarp(true);
+                                  runOnUiThread(() -> {
+                                      btnMainAction.setEnabled(true);
+                                      currentState = 2;
+                                      dewarpView.showingPreview = true;
+                                      updateUI();
+                                  });
+                              } catch (Throwable e) {
+                                  runOnUiThread(() -> {
+                                      Toast.makeText(this, "記憶體不足，請重新啟動", Toast.LENGTH_SHORT).show();
+                                      btnMainAction.setEnabled(true);
+                                      btnRotate.setEnabled(true);
+                                  });
+                              }
                           }).start();
                       } else if (currentState == 2) {
-                          // 確認預覽，寫入暫存並進入下一張
                           Toast.makeText(this, "儲存並準備下一張...", Toast.LENGTH_SHORT).show();
                           btnMainAction.setEnabled(false);
                           btnRetake.setEnabled(false);
@@ -290,18 +296,26 @@ jobs:
                   startActivityForResult(Intent.createChooser(intent, "可長按選取無數量上限的照片"), REQ_PICK_IMAGE);
               }
 
+              // 修復串流洩漏與錯誤讀取
               private void loadUriIntoView(Uri uri) {
-                  try (InputStream is = getContentResolver().openInputStream(uri)) {
+                  try {
                       BitmapFactory.Options options = new BitmapFactory.Options();
                       options.inJustDecodeBounds = true;
-                      BitmapFactory.decodeStream(getContentResolver().openInputStream(uri), null, options);
+                      
+                      // 第一次開啟流獲取尺寸，並立刻關閉
+                      try (InputStream is1 = getContentResolver().openInputStream(uri)) {
+                          BitmapFactory.decodeStream(is1, null, options);
+                      }
                       
                       options.inSampleSize = calculateInSampleSize(options, 2000, 2000);
                       options.inJustDecodeBounds = false;
                       
-                      Bitmap bmp = BitmapFactory.decodeStream(is, null, options);
-                      if (bmp != null) {
-                          dewarpView.setBitmap(bmp);
+                      // 第二次獨立開啟流讀取內容
+                      try (InputStream is2 = getContentResolver().openInputStream(uri)) {
+                          Bitmap bmp = BitmapFactory.decodeStream(is2, null, options);
+                          if (bmp != null) {
+                              dewarpView.setBitmap(bmp);
+                          }
                       }
                   } catch (Exception e) {
                       Toast.makeText(this, "讀取照片失敗: " + uri.toString(), Toast.LENGTH_SHORT).show();
@@ -459,19 +473,53 @@ jobs:
                       magCrossPaint.setStrokeWidth(3f);
                   }
 
-                  void rotateImage() {
+                  // 💡 背景安全旋轉機制 (防當機)
+                  void rotateImageSafely() {
                       if (sourceBitmap == null) return;
-                      Matrix matrix = new Matrix();
-                      matrix.postRotate(90);
-                      Bitmap rotated = Bitmap.createBitmap(sourceBitmap, 0, 0, 
-                              sourceBitmap.getWidth(), sourceBitmap.getHeight(), matrix, true);
-                      setBitmap(rotated);
+                      Toast.makeText(getContext(), "旋轉處理中...", Toast.LENGTH_SHORT).show();
+                      btnMainAction.setEnabled(false);
+                      btnRotate.setEnabled(false);
+                      
+                      new Thread(() -> {
+                          try {
+                              Matrix matrix = new Matrix();
+                              matrix.postRotate(90);
+                              Bitmap rotated = Bitmap.createBitmap(sourceBitmap, 0, 0, 
+                                      sourceBitmap.getWidth(), sourceBitmap.getHeight(), matrix, true);
+                              
+                              post(() -> {
+                                  Bitmap old = sourceBitmap;
+                                  sourceBitmap = rotated;
+                                  
+                                  // 重置邊緣檢測點
+                                  autoDetectPaperBounds(rotated);
+          
+                                  BitmapShader shader = new BitmapShader(rotated, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                                  magFillPaint.setShader(shader);
+                                  invalidate();
+                                  
+                                  btnMainAction.setEnabled(true);
+                                  btnRotate.setEnabled(true);
+          
+                                  // 延遲回收避免畫布渲染崩潰
+                                  postDelayed(() -> {
+                                      if (old != null && old != rotated && !old.isRecycled()) {
+                                          old.recycle();
+                                      }
+                                  }, 500);
+                              });
+                          } catch (Throwable e) {
+                              post(() -> {
+                                  Toast.makeText(getContext(), "記憶體不足，旋轉失敗", Toast.LENGTH_SHORT).show();
+                                  btnMainAction.setEnabled(true);
+                                  btnRotate.setEnabled(true);
+                              });
+                          }
+                      }).start();
                   }
 
                   void setBitmap(Bitmap bmp) {
-                      if (sourceBitmap != null && sourceBitmap != bmp) {
-                          sourceBitmap.recycle();
-                      }
+                      Bitmap old = sourceBitmap;
                       sourceBitmap = bmp;
                       if (bmp == null) {
                           invalidate();
@@ -484,6 +532,13 @@ jobs:
                       magFillPaint.setShader(shader);
 
                       invalidate();
+                      
+                      // 延遲回收避免與 onDraw 衝撞
+                      postDelayed(() -> {
+                          if (old != null && old != bmp && !old.isRecycled()) {
+                              old.recycle();
+                          }
+                      }, 500);
                   }
 
                   private void autoDetectPaperBounds(Bitmap bmp) {
@@ -556,7 +611,11 @@ jobs:
                       canvas.save();
                       canvas.translate(offsetX, offsetY);
                       canvas.scale(scale, scale);
-                      canvas.drawBitmap(displayBmp, 0, 0, null);
+                      
+                      // 防止已回收的影像引發崩潰
+                      if (!displayBmp.isRecycled()) {
+                          canvas.drawBitmap(displayBmp, 0, 0, null);
+                      }
                       canvas.restore();
                       
                       if (showingPreview) return;
@@ -584,7 +643,7 @@ jobs:
                           canvas.drawCircle(scr[i].x, scr[i].y, 26f, ptPaint);
                       }
 
-                      if (activePt != -1) {
+                      if (activePt != -1 && !sourceBitmap.isRecycled()) {
                           float focusScrX = scr[activePt].x;
                           float focusScrY = scr[activePt].y;
                           float magCenterX = focusScrX;
