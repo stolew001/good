@@ -70,8 +70,8 @@ jobs:
                   applicationId "com.example.a4scanner"
                   minSdk 24
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 5
+                  versionName "2.1"
               }
 
               buildTypes {
@@ -92,7 +92,8 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <application
                   android:allowBackup="true"
-                  android:label="A4捲曲轉PDF"
+                  android:largeHeap="true"
+                  android:label="A4無限制掃描儀"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
                   <activity
                       android:name=".MainActivity"
@@ -111,14 +112,18 @@ jobs:
           package com.example.a4scanner;
 
           import android.app.Activity;
+          import android.content.ClipData;
           import android.content.Intent;
           import android.graphics.Bitmap;
           import android.graphics.BitmapFactory;
+          import android.graphics.BitmapShader;
           import android.graphics.Canvas;
           import android.graphics.Color;
+          import android.graphics.Matrix;
           import android.graphics.Paint;
           import android.graphics.Path;
           import android.graphics.PointF;
+          import android.graphics.Shader;
           import android.graphics.pdf.PdfDocument;
           import android.net.Uri;
           import android.os.Bundle;
@@ -127,10 +132,15 @@ jobs:
           import android.view.View;
           import android.widget.Button;
           import android.widget.LinearLayout;
+          import android.widget.TextView;
           import android.widget.Toast;
 
+          import java.io.File;
+          import java.io.FileOutputStream;
           import java.io.InputStream;
           import java.io.OutputStream;
+          import java.util.ArrayList;
+          import java.util.List;
 
           public class MainActivity extends Activity {
               private static final int REQ_PICK_IMAGE = 1001;
@@ -139,8 +149,14 @@ jobs:
               private static final int A4_HEIGHT = 1754;
 
               private DewarpView dewarpView;
-              private Bitmap resultBitmap;
-              private boolean enhanceMode = true;
+              
+              // 批量處理與硬碟快取管理 (解除記憶體限制)
+              private List<Uri> pendingUris = new ArrayList<>();
+              private List<File> tempFiles = new ArrayList<>();
+              private int currentProcessingIndex = 0;
+              
+              private TextView tvStatus;
+              private Button btnMainAction;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -150,6 +166,13 @@ jobs:
                   root.setOrientation(LinearLayout.VERTICAL);
                   root.setBackgroundColor(Color.parseColor("#1E1E1E"));
 
+                  tvStatus = new TextView(this);
+                  tvStatus.setTextColor(Color.WHITE);
+                  tvStatus.setTextSize(18f);
+                  tvStatus.setGravity(Gravity.CENTER);
+                  tvStatus.setPadding(0, 30, 0, 10);
+                  root.addView(tvStatus);
+
                   dewarpView = new DewarpView(this);
                   LinearLayout.LayoutParams viewParams = new LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
@@ -158,115 +181,196 @@ jobs:
                   LinearLayout controls = new LinearLayout(this);
                   controls.setOrientation(LinearLayout.HORIZONTAL);
                   controls.setGravity(Gravity.CENTER);
-                  controls.setPadding(16, 16, 16, 16);
+                  controls.setPadding(16, 20, 16, 30);
 
-                  Button btnPick = new Button(this);
-                  btnPick.setText("1. 選取照片");
-                  btnPick.setOnClickListener(v -> {
-                      Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
-                      intent.setType("image/*");
-                      startActivityForResult(Intent.createChooser(intent, "選擇A4紙照片"), REQ_PICK_IMAGE);
-                  });
-
-                  Button btnPreview = new Button(this);
-                  btnPreview.setText("2. 預覽拉平");
-                  btnPreview.setOnClickListener(v -> {
-                      if (dewarpView.sourceBitmap == null) {
-                          Toast.makeText(this, "請先選取照片", Toast.LENGTH_SHORT).show();
-                          return;
-                      }
-                      if (dewarpView.showingPreview) {
-                          dewarpView.showingPreview = false;
-                          btnPreview.setText("2. 預覽拉平");
+                  btnMainAction = new Button(this);
+                  
+                  btnMainAction.setOnClickListener(v -> {
+                      if (pendingUris.isEmpty()) {
+                          pickImages();
                       } else {
-                          resultBitmap = dewarpView.processDewarp(enhanceMode);
-                          dewarpView.showingPreview = true;
-                          btnPreview.setText("返回調整點");
+                          Toast.makeText(this, "處理中，請稍候...", Toast.LENGTH_SHORT).show();
+                          btnMainAction.setEnabled(false);
+                          
+                          new Thread(() -> {
+                              Bitmap result = dewarpView.processDewarp(true);
+                              
+                              // 寫入硬碟暫存以防記憶體溢出
+                              try {
+                                  File tempFile = new File(getCacheDir(), "page_" + currentProcessingIndex + ".jpg");
+                                  try (FileOutputStream out = new FileOutputStream(tempFile)) {
+                                      result.compress(Bitmap.CompressFormat.JPEG, 90, out);
+                                  }
+                                  tempFiles.add(tempFile);
+                              } catch (Exception e) {
+                                  e.printStackTrace();
+                              }
+                              
+                              result.recycle(); // 立即釋放記憶體
+                              currentProcessingIndex++;
+                              
+                              runOnUiThread(() -> {
+                                  btnMainAction.setEnabled(true);
+                                  if (currentProcessingIndex < pendingUris.size()) {
+                                      loadUriIntoView(pendingUris.get(currentProcessingIndex));
+                                      updateUI();
+                                  } else {
+                                      Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                                      intent.addCategory(Intent.CATEGORY_OPENABLE);
+                                      intent.setType("application/pdf");
+                                      intent.putExtra(Intent.EXTRA_TITLE, "BatchScan_" + System.currentTimeMillis() + ".pdf");
+                                      startActivityForResult(intent, REQ_SAVE_PDF);
+                                  }
+                              });
+                          }).start();
                       }
-                      dewarpView.invalidate();
                   });
 
-                  Button btnFilter = new Button(this);
-                  btnFilter.setText("增亮: 開");
-                  btnFilter.setOnClickListener(v -> {
-                      enhanceMode = !enhanceMode;
-                      btnFilter.setText(enhanceMode ? "增亮: 開" : "增亮: 關");
-                      if (dewarpView.showingPreview && dewarpView.sourceBitmap != null) {
-                          resultBitmap = dewarpView.processDewarp(enhanceMode);
-                          dewarpView.invalidate();
-                      }
-                  });
-
-                  Button btnPdf = new Button(this);
-                  btnPdf.setText("3. 存成PDF");
-                  btnPdf.setOnClickListener(v -> {
-                      if (dewarpView.sourceBitmap == null) {
-                          Toast.makeText(this, "請先選取照片", Toast.LENGTH_SHORT).show();
-                          return;
-                      }
-                      resultBitmap = dewarpView.processDewarp(enhanceMode);
-                      Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-                      intent.addCategory(Intent.CATEGORY_OPENABLE);
-                      intent.setType("application/pdf");
-                      intent.putExtra(Intent.EXTRA_TITLE, "A4_Scan_" + System.currentTimeMillis() + ".pdf");
-                      startActivityForResult(intent, REQ_SAVE_PDF);
-                  });
-
-                  controls.addView(btnPick);
-                  controls.addView(btnPreview);
-                  controls.addView(btnFilter);
-                  controls.addView(btnPdf);
+                  controls.addView(btnMainAction);
                   root.addView(controls);
 
+                  updateUI();
                   setContentView(root);
+              }
+
+              private void pickImages() {
+                  Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                  intent.setType("image/*");
+                  intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); 
+                  startActivityForResult(Intent.createChooser(intent, "可長按選取無數量上限的照片"), REQ_PICK_IMAGE);
+              }
+
+              private void loadUriIntoView(Uri uri) {
+                  try (InputStream is = getContentResolver().openInputStream(uri)) {
+                      BitmapFactory.Options options = new BitmapFactory.Options();
+                      options.inJustDecodeBounds = true;
+                      BitmapFactory.decodeStream(getContentResolver().openInputStream(uri), null, options);
+                      
+                      options.inSampleSize = calculateInSampleSize(options, 2000, 2000);
+                      options.inJustDecodeBounds = false;
+                      
+                      Bitmap bmp = BitmapFactory.decodeStream(is, null, options);
+                      if (bmp != null) {
+                          dewarpView.setBitmap(bmp);
+                      }
+                  } catch (Exception e) {
+                      Toast.makeText(this, "讀取照片失敗: " + uri.toString(), Toast.LENGTH_SHORT).show();
+                  }
+              }
+
+              private int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
+                  final int height = options.outHeight;
+                  final int width = options.outWidth;
+                  int inSampleSize = 1;
+                  if (height > reqHeight || width > reqWidth) {
+                      final int halfHeight = height / 2;
+                      final int halfWidth = width / 2;
+                      while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
+                          inSampleSize *= 2;
+                      }
+                  }
+                  return inSampleSize;
+              }
+
+              private void updateUI() {
+                  if (pendingUris.isEmpty()) {
+                      tvStatus.setText("無限制批量掃描 - 就緒");
+                      btnMainAction.setText("一次選取多張相片");
+                      dewarpView.setVisibility(View.VISIBLE);
+                  } else {
+                      tvStatus.setText("調整第 " + (currentProcessingIndex + 1) + " / " + pendingUris.size() + " 張");
+                      if (currentProcessingIndex == pendingUris.size() - 1) {
+                          btnMainAction.setText("確認並儲存 PDF");
+                      } else {
+                          btnMainAction.setText("確認並處理下一張");
+                      }
+                  }
+                  dewarpView.invalidate();
               }
 
               @Override
               protected void onActivityResult(int requestCode, int resultCode, Intent data) {
                   super.onActivityResult(requestCode, resultCode, data);
-                  if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+                  if (resultCode != RESULT_OK || data == null) return;
 
-                  Uri uri = data.getData();
                   if (requestCode == REQ_PICK_IMAGE) {
-                      try (InputStream is = getContentResolver().openInputStream(uri)) {
-                          Bitmap bmp = BitmapFactory.decodeStream(is);
-                          if (bmp != null) {
-                              dewarpView.setBitmap(bmp);
+                      pendingUris.clear();
+                      
+                      for (File f : tempFiles) f.delete();
+                      tempFiles.clear();
+                      currentProcessingIndex = 0;
+
+                      ClipData clipData = data.getClipData();
+                      if (clipData != null) {
+                          for (int i = 0; i < clipData.getItemCount(); i++) {
+                              pendingUris.add(clipData.getItemAt(i).getUri());
                           }
-                      } catch (Exception e) {
-                          Toast.makeText(this, "讀取照片失敗", Toast.LENGTH_SHORT).show();
+                      } else if (data.getData() != null) {
+                          pendingUris.add(data.getData());
+                      }
+
+                      if (!pendingUris.isEmpty()) {
+                          loadUriIntoView(pendingUris.get(0));
+                          updateUI();
                       }
                   } else if (requestCode == REQ_SAVE_PDF) {
-                      savePdfToUri(uri);
+                      savePdfToUri(data.getData());
                   }
               }
 
               private void savePdfToUri(Uri uri) {
-                  PdfDocument pdf = new PdfDocument();
-                  PdfDocument.PageInfo pageInfo = new PdfDocument.PageInfo.Builder(A4_WIDTH, A4_HEIGHT, 1).create();
-                  PdfDocument.Page page = pdf.startPage(pageInfo);
-                  page.getCanvas().drawBitmap(resultBitmap, 0, 0, null);
-                  pdf.finishPage(page);
+                  Toast.makeText(this, "正在打包 " + tempFiles.size() + " 頁的 PDF...", Toast.LENGTH_SHORT).show();
+                  new Thread(() -> {
+                      PdfDocument pdf = new PdfDocument();
+                      for (int i = 0; i < tempFiles.size(); i++) {
+                          PdfDocument.PageInfo pageInfo = new PdfDocument.PageInfo.Builder(A4_WIDTH, A4_HEIGHT, i + 1).create();
+                          PdfDocument.Page page = pdf.startPage(pageInfo);
+                          
+                          // 從暫存檔讀取，寫入 PDF 後立刻回收
+                          Bitmap pageBmp = BitmapFactory.decodeFile(tempFiles.get(i).getAbsolutePath());
+                          if (pageBmp != null) {
+                              page.getCanvas().drawBitmap(pageBmp, 0, 0, null);
+                              pageBmp.recycle();
+                          }
+                          pdf.finishPage(page);
+                      }
 
-                  try (OutputStream os = getContentResolver().openOutputStream(uri)) {
-                      pdf.writeTo(os);
-                      Toast.makeText(this, "PDF 儲存成功！", Toast.LENGTH_LONG).show();
-                  } catch (Exception e) {
-                      Toast.makeText(this, "儲存失敗: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                  } finally {
-                      pdf.close();
-                  }
+                      try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                          pdf.writeTo(os);
+                          runOnUiThread(() -> {
+                              Toast.makeText(this, "PDF 儲存成功！(共 " + tempFiles.size() + " 頁)", Toast.LENGTH_LONG).show();
+                              
+                              for (File f : tempFiles) f.delete();
+                              tempFiles.clear();
+                              pendingUris.clear();
+                              currentProcessingIndex = 0;
+                              dewarpView.setBitmap(null);
+                              updateUI();
+                          });
+                      } catch (Exception e) {
+                          runOnUiThread(() -> Toast.makeText(this, "儲存失敗: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+                      } finally {
+                          pdf.close();
+                      }
+                  }).start();
               }
 
               private class DewarpView extends View {
                   Bitmap sourceBitmap;
-                  boolean showingPreview = false;
                   PointF[] pts = new PointF[6];
                   int activePt = -1;
                   float scale = 1f, offsetX = 0f, offsetY = 0f;
                   Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
                   Paint ptPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
                   Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+                  private static final float MAGNIFIER_RADIUS = 130f;
+                  private static final float MAGNIFIER_FACTOR = 2.2f;
+                  private static final float MAGNIFIER_OFFSET_Y = 220f;
+                  private Paint magBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  private Paint magCrossPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  private Paint magFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  private Matrix magMatrix = new Matrix();
 
                   DewarpView(Activity context) {
                       super(context);
@@ -278,11 +382,26 @@ jobs:
                       textPaint.setColor(Color.WHITE);
                       textPaint.setTextSize(38f);
                       textPaint.setTextAlign(Paint.Align.CENTER);
+
+                      magBorderPaint.setColor(Color.WHITE);
+                      magBorderPaint.setStyle(Paint.Style.STROKE);
+                      magBorderPaint.setStrokeWidth(8f);
+
+                      magCrossPaint.setColor(Color.RED);
+                      magCrossPaint.setStyle(Paint.Style.STROKE);
+                      magCrossPaint.setStrokeWidth(3f);
                   }
 
                   void setBitmap(Bitmap bmp) {
+                      if (sourceBitmap != null && sourceBitmap != bmp) {
+                          sourceBitmap.recycle();
+                      }
                       sourceBitmap = bmp;
-                      showingPreview = false;
+                      if (bmp == null) {
+                          invalidate();
+                          return;
+                      }
+                      
                       float w = bmp.getWidth();
                       float h = bmp.getHeight();
                       pts[0] = new PointF(w * 0.15f, h * 0.15f);
@@ -291,6 +410,10 @@ jobs:
                       pts[3] = new PointF(w * 0.85f, h * 0.85f);
                       pts[4] = new PointF(w * 0.50f, h * 0.82f);
                       pts[5] = new PointF(w * 0.15f, h * 0.85f);
+
+                      BitmapShader shader = new BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                      magFillPaint.setShader(shader);
+
                       invalidate();
                   }
 
@@ -298,13 +421,12 @@ jobs:
                   protected void onDraw(Canvas canvas) {
                       super.onDraw(canvas);
                       if (sourceBitmap == null) {
-                          canvas.drawText("請點擊下方「1. 選取照片」載入捲曲的 A4 紙照片", getWidth() / 2f, getHeight() / 2f, textPaint);
+                          canvas.drawText("請點擊下方按鈕選取任意數量的相片", getWidth() / 2f, getHeight() / 2f, textPaint);
                           return;
                       }
 
-                      Bitmap displayBmp = (showingPreview && resultBitmap != null) ? resultBitmap : sourceBitmap;
                       float vw = getWidth(), vh = getHeight();
-                      float bw = displayBmp.getWidth(), bh = displayBmp.getHeight();
+                      float bw = sourceBitmap.getWidth(), bh = sourceBitmap.getHeight();
                       scale = Math.min(vw / bw, vh / bh) * 0.92f;
                       offsetX = (vw - bw * scale) / 2f;
                       offsetY = (vh - bh * scale) / 2f;
@@ -312,10 +434,8 @@ jobs:
                       canvas.save();
                       canvas.translate(offsetX, offsetY);
                       canvas.scale(scale, scale);
-                      canvas.drawBitmap(displayBmp, 0, 0, null);
+                      canvas.drawBitmap(sourceBitmap, 0, 0, null);
                       canvas.restore();
-
-                      if (showingPreview) return;
 
                       PointF[] scr = new PointF[6];
                       for (int i = 0; i < 6; i++) {
@@ -339,18 +459,44 @@ jobs:
                           ptPaint.setColor((i == 1 || i == 4) ? Color.YELLOW : Color.GREEN);
                           canvas.drawCircle(scr[i].x, scr[i].y, 26f, ptPaint);
                       }
+
+                      if (activePt != -1) {
+                          float focusScrX = scr[activePt].x;
+                          float focusScrY = scr[activePt].y;
+                          float magCenterX = focusScrX;
+                          float magCenterY = focusScrY - MAGNIFIER_OFFSET_Y;
+
+                          if (magCenterY - MAGNIFIER_RADIUS < 20f) {
+                              magCenterY = focusScrY + MAGNIFIER_OFFSET_Y;
+                          }
+                          magCenterX = Math.max(MAGNIFIER_RADIUS + 20f, Math.min(getWidth() - MAGNIFIER_RADIUS - 20f, magCenterX));
+
+                          magMatrix.reset();
+                          magMatrix.postScale(scale * MAGNIFIER_FACTOR, scale * MAGNIFIER_FACTOR);
+                          magMatrix.postTranslate(
+                                  magCenterX - pts[activePt].x * scale * MAGNIFIER_FACTOR,
+                                  magCenterY - pts[activePt].y * scale * MAGNIFIER_FACTOR
+                          );
+                          magFillPaint.getShader().setLocalMatrix(magMatrix);
+
+                          canvas.drawCircle(magCenterX, magCenterY, MAGNIFIER_RADIUS, magFillPaint);
+                          canvas.drawCircle(magCenterX, magCenterY, MAGNIFIER_RADIUS, magBorderPaint);
+
+                          canvas.drawLine(magCenterX - 25f, magCenterY, magCenterX + 25f, magCenterY, magCrossPaint);
+                          canvas.drawLine(magCenterX, magCenterY - 25f, magCenterX, magCenterY + 25f, magCrossPaint);
+                      }
                   }
 
                   @Override
                   public boolean onTouchEvent(MotionEvent event) {
-                      if (sourceBitmap == null || showingPreview) return false;
+                      if (sourceBitmap == null) return false;
                       float tx = (event.getX() - offsetX) / scale;
                       float ty = (event.getY() - offsetY) / scale;
 
                       switch (event.getAction()) {
                           case MotionEvent.ACTION_DOWN:
                               activePt = -1;
-                              float minDist = 80f / scale;
+                              float minDist = 90f / scale;
                               for (int i = 0; i < 6; i++) {
                                   float d = (float) Math.hypot(pts[i].x - tx, pts[i].y - ty);
                                   if (d < minDist) {
@@ -358,6 +504,7 @@ jobs:
                                       activePt = i;
                                   }
                               }
+                              if (activePt != -1) invalidate();
                               return activePt != -1;
                           case MotionEvent.ACTION_MOVE:
                               if (activePt != -1) {
@@ -367,7 +514,9 @@ jobs:
                               }
                               return true;
                           case MotionEvent.ACTION_UP:
+                          case MotionEvent.ACTION_CANCEL:
                               activePt = -1;
+                              invalidate();
                               return true;
                       }
                       return super.onTouchEvent(event);
@@ -443,14 +592,8 @@ jobs:
       - name: Build Debug & Release APK
         run: gradle assembleDebug bundleRelease
 
-      - name: Upload APK (直接安裝檔)
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: A4-Dewarp-Scanner-APK
           path: app/build/outputs/apk/debug/app-debug.apk
-
-      - name: Upload AAB (Google Play 上架檔)
-        uses: actions/upload-artifact@v4
-        with:
-          name: A4-Dewarp-Scanner-AAB
-          path: app/build/outputs/bundle/release/app-release.aab
