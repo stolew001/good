@@ -1,195 +1,456 @@
-name: Build A4 Dewarp Scanner APK & AAB
-​on:
-push:
-branches: [ main, master ]
-workflow_dispatch:
-​jobs:
-build-android:
-runs-on: ubuntu-latest
-​steps:
-- name: 1. 檢出儲存庫 (Checkout)
-uses: actions/checkout@v4
-​- name: 2. 設定 Java 17 環境 (Setup JDK 17)
-uses: actions/setup-java@v4
-with:
-distribution: 'temurin'
-java-version: '17'
-​- name: 3. 設定 Gradle 編譯工具 (Setup Gradle)
-uses: gradle/actions/setup-gradle@v3
-with:
-gradle-version: '8.7'
-​- name: 4. 自動生成金鑰與 Android 專案原始碼
-run: |
-mkdir -p app/src/main/java/com/a4scanner/dewarp
-mkdir -p app/src/main/res/xml
-mkdir -p app/src/main/res/values
-​# 產生簽名金鑰 (讓編譯出的 APK 可直接安裝於手機，AAB 可用於測試上架)
-keytool -genkey -v 
--keystore release-key.jks 
--alias a4scanner 
--keyalg RSA 
--keysize 2048 
--validity 10000 
--storepass android123 
--keypass android123 
--dname "CN=A4Scanner, OU=Mobile, O=A4Scanner, L=HK, S=HK, C=HK"
-​cat << 'EOF' > settings.gradle
-pluginManagement {
-repositories {
-google()
-mavenCentral()
-gradlePluginPortal()
-}
-}
-dependencyResolutionManagement {
-repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-repositories {
-google()
-mavenCentral()
-}
-}
-rootProject.name = "A4DewarpScanner"
-include(":app")
-EOF
-​cat << 'EOF' > gradle.properties
-org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-android.useAndroidX=true
-kotlin.code.style=official
-EOF
-​cat << 'EOF' > build.gradle
-plugins {
-id 'com.android.application' version '8.4.0' apply false
-id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
-}
-EOF
-​cat << 'EOF' > app/build.gradle
-plugins {
-id 'com.android.application'
-id 'org.jetbrains.kotlin.android'
-}
-​android {
-namespace 'com.a4scanner.dewarp'
-compileSdk 34
-​defaultConfig {
-applicationId "com.a4scanner.dewarp"
-minSdk 24
-targetSdk 34
-versionCode 1
-versionName "1.0.0"
-}
-​signingConfigs {
-release {
-storeFile file("../release-key.jks")
-storePassword "android123"
-keyAlias "a4scanner"
-keyPassword "android123"
-}
-}
-​buildTypes {
-release {
-signingConfig signingConfigs.release
-minifyEnabled false
-}
-}
-​compileOptions {
-sourceCompatibility JavaVersion.VERSION_17
-targetCompatibility JavaVersion.VERSION_17
-}
-​kotlinOptions {
-jvmTarget = '17'
-}
-}
-​dependencies {
-implementation 'androidx.core:core-ktx:1.12.0'
-}
-EOF
-​cat << 'EOF' > app/src/main/res/xml/file_paths.xml
-<?xml version="1.0" encoding="utf-8"?>
-<paths>
-<cache-path name="camera_photos" path="." />
-</paths>
-EOF
-​cat << 'EOF' > app/src/main/AndroidManifest.xml
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-​<application
-android:allowBackup="true"
-android:label="A4 捲曲拉平掃描器"
-android:supportsRtl="true"
-android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-​<activity
-android:name=".MainActivity"
-android:exported="true"
-android:screenOrientation="portrait">
-<intent-filter>
-<action android:name="android.intent.action.MAIN" />
-<category android:name="android.intent.category.LAUNCHER" />
-</intent-filter>
-</activity>
-​<provider
-android:name="androidx.core.content.FileProvider"
-android:authorities="${applicationId}.fileprovider"
-android:exported="false"
-android:grantUriPermissions="true">
-<meta-data
-android:name="android.support.FILE_PROVIDER_PATHS"
-android:resource="@xml/file_paths" />
-</provider>
-</application>
-</manifest>
-EOF
-​cat << 'EOF' > app/src/main/java/com/a4scanner/dewarp/MainActivity.kt
-package com.a4scanner.dewarp
-​import android.app.Activity
-import android.content.Context
-import android.content.Intent
-import android.graphics.*
-import android.graphics.pdf.PdfDocument
-import android.net.Uri
-import android.os.Bundle
-import android.provider.MediaStore
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
-import android.widget.*
-import androidx.core.content.FileProvider
-import java.io.File
-import kotlin.math.hypot
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
-​class MainActivity : Activity() {
-​private lateinit var cropView: A4CurveOverlayView
-private lateinit var statusText: TextView
-private lateinit var btnPreviewToggle: Button
-private lateinit var btnFilterToggle: Button
-private lateinit var btnAxisToggle: Button
-​private var sourceBitmap: Bitmap? = null
-private var dewarpedBitmap: Bitmap? = null
-private var cameraImageUri: Uri? = null
-​private var isPreviewMode = false
-// 0 = 原色, 1 = 文件增亮, 2 = 黑白高對比
-private var filterMode = 1
-​companion object {
-private const val REQ_PICK_IMAGE = 1001
-private const val REQ_TAKE_PHOTO = 1002
-private const val REQ_SAVE_PDF = 1003
-​// 標準 A4 比例 (1 : 1.4142) 輸出解析度
-private const val A4_WIDTH = 1414
-private const val A4_HEIGHT = 2000
-}
-​override fun onCreate(savedInstanceState: Bundle?) {
-super.onCreate(savedInstanceState)
-​val root = LinearLayout(this).apply {
-orientation = LinearLayout.VERTICAL
-setBackgroundColor(Color.parseColor("#121212"))
-}
-​// 頂部標題與提示列
-statusText = TextView(this).apply {
-text = "請拍照或選擇相片，拖曳 4 個角點與 2 個弧線中點貼合 A4 紙邊緣"
-setTextColor(Color.WHITE)
-textSize = 14f
-setPadding(32, 28, 32, 20)
-setBackgroundColor(Color.parseColor("#1E1E1E"))
-}
-root.addView(s
+name: Build A4 Dewarp PDF APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle 8.5
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+
+      - name: Generate Android Project
+        run: |
+          mkdir -p app/src/main/java/com/example/a4scanner
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "A4DewarpPdf"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.example.a4scanner'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.example.a4scanner"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      signingConfig signingConfigs.debug
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="true"
+                  android:label="A4捲曲轉PDF"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/example/a4scanner/MainActivity.java
+          package com.example.a4scanner;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.graphics.Bitmap;
+          import android.graphics.BitmapFactory;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.Paint;
+          import android.graphics.Path;
+          import android.graphics.PointF;
+          import android.graphics.pdf.PdfDocument;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.view.Gravity;
+          import android.view.MotionEvent;
+          import android.view.View;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.Toast;
+
+          import java.io.InputStream;
+          import java.io.OutputStream;
+
+          public class MainActivity extends Activity {
+              private static final int REQ_PICK_IMAGE = 1001;
+              private static final int REQ_SAVE_PDF = 1002;
+              private static final int A4_WIDTH = 1240;
+              private static final int A4_HEIGHT = 1754;
+
+              private DewarpView dewarpView;
+              private Bitmap resultBitmap;
+              private boolean enhanceMode = true;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setBackgroundColor(Color.parseColor("#1E1E1E"));
+
+                  dewarpView = new DewarpView(this);
+                  LinearLayout.LayoutParams viewParams = new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+                  root.addView(dewarpView, viewParams);
+
+                  LinearLayout controls = new LinearLayout(this);
+                  controls.setOrientation(LinearLayout.HORIZONTAL);
+                  controls.setGravity(Gravity.CENTER);
+                  controls.setPadding(16, 16, 16, 16);
+
+                  Button btnPick = new Button(this);
+                  btnPick.setText("1. 選取照片");
+                  btnPick.setOnClickListener(v -> {
+                      Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                      intent.setType("image/*");
+                      startActivityForResult(Intent.createChooser(intent, "選擇A4紙照片"), REQ_PICK_IMAGE);
+                  });
+
+                  Button btnPreview = new Button(this);
+                  btnPreview.setText("2. 預覽拉平");
+                  btnPreview.setOnClickListener(v -> {
+                      if (dewarpView.sourceBitmap == null) {
+                          Toast.makeText(this, "請先選取照片", Toast.LENGTH_SHORT).show();
+                          return;
+                      }
+                      if (dewarpView.showingPreview) {
+                          dewarpView.showingPreview = false;
+                          btnPreview.setText("2. 預覽拉平");
+                      } else {
+                          resultBitmap = dewarpView.processDewarp(enhanceMode);
+                          dewarpView.showingPreview = true;
+                          btnPreview.setText("返回調整點");
+                      }
+                      dewarpView.invalidate();
+                  });
+
+                  Button btnFilter = new Button(this);
+                  btnFilter.setText("增亮: 開");
+                  btnFilter.setOnClickListener(v -> {
+                      enhanceMode = !enhanceMode;
+                      btnFilter.setText(enhanceMode ? "增亮: 開" : "增亮: 關");
+                      if (dewarpView.showingPreview && dewarpView.sourceBitmap != null) {
+                          resultBitmap = dewarpView.processDewarp(enhanceMode);
+                          dewarpView.invalidate();
+                      }
+                  });
+
+                  Button btnPdf = new Button(this);
+                  btnPdf.setText("3. 存成PDF");
+                  btnPdf.setOnClickListener(v -> {
+                      if (dewarpView.sourceBitmap == null) {
+                          Toast.makeText(this, "請先選取照片", Toast.LENGTH_SHORT).show();
+                          return;
+                      }
+                      resultBitmap = dewarpView.processDewarp(enhanceMode);
+                      Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                      intent.addCategory(Intent.CATEGORY_OPENABLE);
+                      intent.setType("application/pdf");
+                      intent.putExtra(Intent.EXTRA_TITLE, "A4_Scan_" + System.currentTimeMillis() + ".pdf");
+                      startActivityForResult(intent, REQ_SAVE_PDF);
+                  });
+
+                  controls.addView(btnPick);
+                  controls.addView(btnPreview);
+                  controls.addView(btnFilter);
+                  controls.addView(btnPdf);
+                  root.addView(controls);
+
+                  setContentView(root);
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+
+                  Uri uri = data.getData();
+                  if (requestCode == REQ_PICK_IMAGE) {
+                      try (InputStream is = getContentResolver().openInputStream(uri)) {
+                          Bitmap bmp = BitmapFactory.decodeStream(is);
+                          if (bmp != null) {
+                              dewarpView.setBitmap(bmp);
+                          }
+                      } catch (Exception e) {
+                          Toast.makeText(this, "讀取照片失敗", Toast.LENGTH_SHORT).show();
+                      }
+                  } else if (requestCode == REQ_SAVE_PDF) {
+                      savePdfToUri(uri);
+                  }
+              }
+
+              private void savePdfToUri(Uri uri) {
+                  PdfDocument pdf = new PdfDocument();
+                  PdfDocument.PageInfo pageInfo = new PdfDocument.PageInfo.Builder(A4_WIDTH, A4_HEIGHT, 1).create();
+                  PdfDocument.Page page = pdf.startPage(pageInfo);
+                  page.getCanvas().drawBitmap(resultBitmap, 0, 0, null);
+                  pdf.finishPage(page);
+
+                  try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                      pdf.writeTo(os);
+                      Toast.makeText(this, "PDF 儲存成功！", Toast.LENGTH_LONG).show();
+                  } catch (Exception e) {
+                      Toast.makeText(this, "儲存失敗: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                  } finally {
+                      pdf.close();
+                  }
+              }
+
+              private class DewarpView extends View {
+                  Bitmap sourceBitmap;
+                  boolean showingPreview = false;
+                  PointF[] pts = new PointF[6];
+                  int activePt = -1;
+                  float scale = 1f, offsetX = 0f, offsetY = 0f;
+                  Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  Paint ptPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+                  DewarpView(Activity context) {
+                      super(context);
+                      linePaint.setColor(Color.CYAN);
+                      linePaint.setStyle(Paint.Style.STROKE);
+                      linePaint.setStrokeWidth(5f);
+
+                      ptPaint.setStyle(Paint.Style.FILL);
+                      textPaint.setColor(Color.WHITE);
+                      textPaint.setTextSize(38f);
+                      textPaint.setTextAlign(Paint.Align.CENTER);
+                  }
+
+                  void setBitmap(Bitmap bmp) {
+                      sourceBitmap = bmp;
+                      showingPreview = false;
+                      float w = bmp.getWidth();
+                      float h = bmp.getHeight();
+                      pts[0] = new PointF(w * 0.15f, h * 0.15f);
+                      pts[1] = new PointF(w * 0.50f, h * 0.12f);
+                      pts[2] = new PointF(w * 0.85f, h * 0.15f);
+                      pts[3] = new PointF(w * 0.85f, h * 0.85f);
+                      pts[4] = new PointF(w * 0.50f, h * 0.82f);
+                      pts[5] = new PointF(w * 0.15f, h * 0.85f);
+                      invalidate();
+                  }
+
+                  @Override
+                  protected void onDraw(Canvas canvas) {
+                      super.onDraw(canvas);
+                      if (sourceBitmap == null) {
+                          canvas.drawText("請點擊下方「1. 選取照片」載入捲曲的 A4 紙照片", getWidth() / 2f, getHeight() / 2f, textPaint);
+                          return;
+                      }
+
+                      Bitmap displayBmp = (showingPreview && resultBitmap != null) ? resultBitmap : sourceBitmap;
+                      float vw = getWidth(), vh = getHeight();
+                      float bw = displayBmp.getWidth(), bh = displayBmp.getHeight();
+                      scale = Math.min(vw / bw, vh / bh) * 0.92f;
+                      offsetX = (vw - bw * scale) / 2f;
+                      offsetY = (vh - bh * scale) / 2f;
+
+                      canvas.save();
+                      canvas.translate(offsetX, offsetY);
+                      canvas.scale(scale, scale);
+                      canvas.drawBitmap(displayBmp, 0, 0, null);
+                      canvas.restore();
+
+                      if (showingPreview) return;
+
+                      PointF[] scr = new PointF[6];
+                      for (int i = 0; i < 6; i++) {
+                          scr[i] = new PointF(pts[i].x * scale + offsetX, pts[i].y * scale + offsetY);
+                      }
+
+                      Path path = new Path();
+                      float cxTop = 2 * scr[1].x - 0.5f * (scr[0].x + scr[2].x);
+                      float cyTop = 2 * scr[1].y - 0.5f * (scr[0].y + scr[2].y);
+                      float cxBot = 2 * scr[4].x - 0.5f * (scr[5].x + scr[3].x);
+                      float cyBot = 2 * scr[4].y - 0.5f * (scr[5].y + scr[3].y);
+
+                      path.moveTo(scr[0].x, scr[0].y);
+                      path.quadTo(cxTop, cyTop, scr[2].x, scr[2].y);
+                      path.lineTo(scr[3].x, scr[3].y);
+                      path.quadTo(cxBot, cyBot, scr[5].x, scr[5].y);
+                      path.close();
+                      canvas.drawPath(path, linePaint);
+
+                      for (int i = 0; i < 6; i++) {
+                          ptPaint.setColor((i == 1 || i == 4) ? Color.YELLOW : Color.GREEN);
+                          canvas.drawCircle(scr[i].x, scr[i].y, 26f, ptPaint);
+                      }
+                  }
+
+                  @Override
+                  public boolean onTouchEvent(MotionEvent event) {
+                      if (sourceBitmap == null || showingPreview) return false;
+                      float tx = (event.getX() - offsetX) / scale;
+                      float ty = (event.getY() - offsetY) / scale;
+
+                      switch (event.getAction()) {
+                          case MotionEvent.ACTION_DOWN:
+                              activePt = -1;
+                              float minDist = 80f / scale;
+                              for (int i = 0; i < 6; i++) {
+                                  float d = (float) Math.hypot(pts[i].x - tx, pts[i].y - ty);
+                                  if (d < minDist) {
+                                      minDist = d;
+                                      activePt = i;
+                                  }
+                              }
+                              return activePt != -1;
+                          case MotionEvent.ACTION_MOVE:
+                              if (activePt != -1) {
+                                  pts[activePt].x = Math.max(0, Math.min(sourceBitmap.getWidth() - 1, tx));
+                                  pts[activePt].y = Math.max(0, Math.min(sourceBitmap.getHeight() - 1, ty));
+                                  invalidate();
+                              }
+                              return true;
+                          case MotionEvent.ACTION_UP:
+                              activePt = -1;
+                              return true;
+                      }
+                      return super.onTouchEvent(event);
+                  }
+
+                  Bitmap processDewarp(boolean enhance) {
+                      int srcW = sourceBitmap.getWidth();
+                      int srcH = sourceBitmap.getHeight();
+                      int[] srcPixels = new int[srcW * srcH];
+                      sourceBitmap.getPixels(srcPixels, 0, srcW, 0, 0, srcW, srcH);
+
+                      int[] dstPixels = new int[A4_WIDTH * A4_HEIGHT];
+
+                      float cxTop = 2 * pts[1].x - 0.5f * (pts[0].x + pts[2].x);
+                      float cyTop = 2 * pts[1].y - 0.5f * (pts[0].y + pts[2].y);
+                      float cxBot = 2 * pts[4].x - 0.5f * (pts[5].x + pts[3].x);
+                      float cyBot = 2 * pts[4].y - 0.5f * (pts[5].y + pts[3].y);
+
+                      int steps = A4_WIDTH * 2;
+                      float[] arcLen = new float[steps + 1];
+                      float prevX = pts[0].x, prevY = pts[0].y;
+                      for (int i = 1; i <= steps; i++) {
+                          float t = i / (float) steps;
+                          float u = 1f - t;
+                          float x = u * u * pts[0].x + 2 * u * t * cxTop + t * t * pts[2].x;
+                          float y = u * u * pts[0].y + 2 * u * t * cyTop + t * t * pts[2].y;
+                          arcLen[i] = arcLen[i - 1] + (float) Math.hypot(x - prevX, y - prevY);
+                          prevX = x;
+                          prevY = y;
+                      }
+                      float totalLen = arcLen[steps];
+
+                      int searchIdx = 0;
+                      for (int x = 0; x < A4_WIDTH; x++) {
+                          float target = (x / (float) (A4_WIDTH - 1)) * totalLen;
+                          while (searchIdx < steps && arcLen[searchIdx] < target) {
+                              searchIdx++;
+                          }
+                          float t = searchIdx / (float) steps;
+                          float u = 1f - t;
+
+                          float tx = u * u * pts[0].x + 2 * u * t * cxTop + t * t * pts[2].x;
+                          float ty = u * u * pts[0].y + 2 * u * t * cyTop + t * t * pts[2].y;
+                          float bx = u * u * pts[5].x + 2 * u * t * cxBot + t * t * pts[3].x;
+                          float by = u * u * pts[5].y + 2 * u * t * cyBot + t * t * pts[3].y;
+
+                          for (int y = 0; y < A4_HEIGHT; y++) {
+                              float v = y / (float) (A4_HEIGHT - 1);
+                              int sx = Math.min(srcW - 1, Math.max(0, (int) (tx + v * (bx - tx))));
+                              int sy = Math.min(srcH - 1, Math.max(0, (int) (ty + v * (by - ty))));
+                              int c = srcPixels[sy * srcW + sx];
+
+                              if (enhance) {
+                                  int r = (c >> 16) & 0xFF;
+                                  int g = (c >> 8) & 0xFF;
+                                  int b = c & 0xFF;
+                                  int lum = (r * 77 + g * 150 + b * 29) >> 8;
+                                  int val = Math.min(255, Math.max(0, (int) ((lum - 110) * 1.8f + 135)));
+                                  c = 0xFF000000 | (val << 16) | (val << 8) | val;
+                              }
+                              dstPixels[y * A4_WIDTH + x] = c;
+                          }
+                      }
+
+                      Bitmap out = Bitmap.createBitmap(A4_WIDTH, A4_HEIGHT, Bitmap.Config.ARGB_8888);
+                      out.setPixels(dstPixels, 0, A4_WIDTH, 0, 0, A4_WIDTH, A4_HEIGHT);
+                      return out;
+                  }
+              }
+          }
+          EOF
+
+      - name: Build Debug & Release APK
+        run: gradle assembleDebug bundleRelease
+
+      - name: Upload APK (直接安裝檔)
+        uses: actions/upload-artifact@v4
+        with:
+          name: A4-Dewarp-Scanner-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload AAB (Google Play 上架檔)
+        uses: actions/upload-artifact@v4
+        with:
+          name: A4-Dewarp-Scanner-AAB
+          path: app/build/outputs/bundle/release/app-release.aab
