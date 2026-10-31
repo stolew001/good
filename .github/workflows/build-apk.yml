@@ -70,8 +70,8 @@ jobs:
                   applicationId "com.example.a4scanner"
                   minSdk 24
                   targetSdk 34
-                  versionCode 5
-                  versionName "2.1"
+                  versionCode 7
+                  versionName "2.3"
               }
 
               buildTypes {
@@ -150,13 +150,18 @@ jobs:
 
               private DewarpView dewarpView;
               
-              // 批量處理與硬碟快取管理 (解除記憶體限制)
               private List<Uri> pendingUris = new ArrayList<>();
               private List<File> tempFiles = new ArrayList<>();
               private int currentProcessingIndex = 0;
               
+              // 0: 就緒, 1: 調整節點中, 2: 預覽結果
+              private int currentState = 0; 
+              private Bitmap previewBitmap = null;
+              
               private TextView tvStatus;
               private Button btnMainAction;
+              private Button btnRotate;
+              private Button btnRetake;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
@@ -183,38 +188,81 @@ jobs:
                   controls.setGravity(Gravity.CENTER);
                   controls.setPadding(16, 20, 16, 30);
 
+                  btnRetake = new Button(this);
+                  btnRetake.setText("重新調整");
+                  btnRetake.setOnClickListener(v -> {
+                      if (currentState == 2) {
+                          currentState = 1;
+                          dewarpView.showingPreview = false;
+                          if (previewBitmap != null) {
+                              previewBitmap.recycle();
+                              previewBitmap = null;
+                          }
+                          updateUI();
+                      }
+                  });
+
+                  btnRotate = new Button(this);
+                  btnRotate.setText("旋轉 90°");
+                  btnRotate.setOnClickListener(v -> {
+                      if (dewarpView.sourceBitmap != null) {
+                          dewarpView.rotateImage();
+                      }
+                  });
+
                   btnMainAction = new Button(this);
-                  
                   btnMainAction.setOnClickListener(v -> {
-                      if (pendingUris.isEmpty()) {
+                      if (currentState == 0) {
                           pickImages();
-                      } else {
-                          Toast.makeText(this, "處理中，請稍候...", Toast.LENGTH_SHORT).show();
+                      } else if (currentState == 1) {
+                          // 生成預覽
+                          Toast.makeText(this, "產生預覽中...", Toast.LENGTH_SHORT).show();
                           btnMainAction.setEnabled(false);
+                          btnRotate.setEnabled(false);
                           
                           new Thread(() -> {
-                              Bitmap result = dewarpView.processDewarp(true);
-                              
-                              // 寫入硬碟暫存以防記憶體溢出
+                              previewBitmap = dewarpView.processDewarp(true);
+                              runOnUiThread(() -> {
+                                  btnMainAction.setEnabled(true);
+                                  currentState = 2;
+                                  dewarpView.showingPreview = true;
+                                  updateUI();
+                              });
+                          }).start();
+                      } else if (currentState == 2) {
+                          // 確認預覽，寫入暫存並進入下一張
+                          Toast.makeText(this, "儲存並準備下一張...", Toast.LENGTH_SHORT).show();
+                          btnMainAction.setEnabled(false);
+                          btnRetake.setEnabled(false);
+                          
+                          new Thread(() -> {
                               try {
                                   File tempFile = new File(getCacheDir(), "page_" + currentProcessingIndex + ".jpg");
                                   try (FileOutputStream out = new FileOutputStream(tempFile)) {
-                                      result.compress(Bitmap.CompressFormat.JPEG, 90, out);
+                                      previewBitmap.compress(Bitmap.CompressFormat.JPEG, 90, out);
                                   }
                                   tempFiles.add(tempFile);
                               } catch (Exception e) {
                                   e.printStackTrace();
                               }
                               
-                              result.recycle(); // 立即釋放記憶體
+                              if (previewBitmap != null) {
+                                  previewBitmap.recycle();
+                                  previewBitmap = null;
+                              }
                               currentProcessingIndex++;
                               
                               runOnUiThread(() -> {
                                   btnMainAction.setEnabled(true);
+                                  btnRetake.setEnabled(true);
                                   if (currentProcessingIndex < pendingUris.size()) {
+                                      currentState = 1;
+                                      dewarpView.showingPreview = false;
                                       loadUriIntoView(pendingUris.get(currentProcessingIndex));
                                       updateUI();
                                   } else {
+                                      currentState = 0;
+                                      dewarpView.showingPreview = false;
                                       Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
                                       intent.addCategory(Intent.CATEGORY_OPENABLE);
                                       intent.setType("application/pdf");
@@ -226,6 +274,8 @@ jobs:
                       }
                   });
 
+                  controls.addView(btnRetake);
+                  controls.addView(btnRotate);
                   controls.addView(btnMainAction);
                   root.addView(controls);
 
@@ -273,17 +323,26 @@ jobs:
               }
 
               private void updateUI() {
-                  if (pendingUris.isEmpty()) {
+                  if (currentState == 0) {
                       tvStatus.setText("無限制批量掃描 - 就緒");
                       btnMainAction.setText("一次選取多張相片");
+                      btnRotate.setVisibility(View.GONE);
+                      btnRetake.setVisibility(View.GONE);
                       dewarpView.setVisibility(View.VISIBLE);
-                  } else {
+                  } else if (currentState == 1) {
                       tvStatus.setText("調整第 " + (currentProcessingIndex + 1) + " / " + pendingUris.size() + " 張");
+                      btnMainAction.setText("預覽拉平結果");
+                      btnRotate.setVisibility(View.VISIBLE);
+                      btnRetake.setVisibility(View.GONE);
+                  } else if (currentState == 2) {
+                      tvStatus.setText("預覽第 " + (currentProcessingIndex + 1) + " / " + pendingUris.size() + " 張");
                       if (currentProcessingIndex == pendingUris.size() - 1) {
-                          btnMainAction.setText("確認並儲存 PDF");
+                          btnMainAction.setText("確認無誤，儲存 PDF");
                       } else {
-                          btnMainAction.setText("確認並處理下一張");
+                          btnMainAction.setText("確認無誤，處理下一張");
                       }
+                      btnRotate.setVisibility(View.GONE);
+                      btnRetake.setVisibility(View.VISIBLE);
                   }
                   dewarpView.invalidate();
               }
@@ -299,6 +358,11 @@ jobs:
                       for (File f : tempFiles) f.delete();
                       tempFiles.clear();
                       currentProcessingIndex = 0;
+                      
+                      if (previewBitmap != null) {
+                          previewBitmap.recycle();
+                          previewBitmap = null;
+                      }
 
                       ClipData clipData = data.getClipData();
                       if (clipData != null) {
@@ -310,6 +374,8 @@ jobs:
                       }
 
                       if (!pendingUris.isEmpty()) {
+                          currentState = 1;
+                          dewarpView.showingPreview = false;
                           loadUriIntoView(pendingUris.get(0));
                           updateUI();
                       }
@@ -326,7 +392,6 @@ jobs:
                           PdfDocument.PageInfo pageInfo = new PdfDocument.PageInfo.Builder(A4_WIDTH, A4_HEIGHT, i + 1).create();
                           PdfDocument.Page page = pdf.startPage(pageInfo);
                           
-                          // 從暫存檔讀取，寫入 PDF 後立刻回收
                           Bitmap pageBmp = BitmapFactory.decodeFile(tempFiles.get(i).getAbsolutePath());
                           if (pageBmp != null) {
                               page.getCanvas().drawBitmap(pageBmp, 0, 0, null);
@@ -344,6 +409,7 @@ jobs:
                               tempFiles.clear();
                               pendingUris.clear();
                               currentProcessingIndex = 0;
+                              currentState = 0;
                               dewarpView.setBitmap(null);
                               updateUI();
                           });
@@ -357,6 +423,7 @@ jobs:
 
               private class DewarpView extends View {
                   Bitmap sourceBitmap;
+                  boolean showingPreview = false;
                   PointF[] pts = new PointF[6];
                   int activePt = -1;
                   float scale = 1f, offsetX = 0f, offsetY = 0f;
@@ -392,6 +459,15 @@ jobs:
                       magCrossPaint.setStrokeWidth(3f);
                   }
 
+                  void rotateImage() {
+                      if (sourceBitmap == null) return;
+                      Matrix matrix = new Matrix();
+                      matrix.postRotate(90);
+                      Bitmap rotated = Bitmap.createBitmap(sourceBitmap, 0, 0, 
+                              sourceBitmap.getWidth(), sourceBitmap.getHeight(), matrix, true);
+                      setBitmap(rotated);
+                  }
+
                   void setBitmap(Bitmap bmp) {
                       if (sourceBitmap != null && sourceBitmap != bmp) {
                           sourceBitmap.recycle();
@@ -402,19 +478,64 @@ jobs:
                           return;
                       }
                       
-                      float w = bmp.getWidth();
-                      float h = bmp.getHeight();
-                      pts[0] = new PointF(w * 0.15f, h * 0.15f);
-                      pts[1] = new PointF(w * 0.50f, h * 0.12f);
-                      pts[2] = new PointF(w * 0.85f, h * 0.15f);
-                      pts[3] = new PointF(w * 0.85f, h * 0.85f);
-                      pts[4] = new PointF(w * 0.50f, h * 0.82f);
-                      pts[5] = new PointF(w * 0.15f, h * 0.85f);
+                      autoDetectPaperBounds(bmp);
 
                       BitmapShader shader = new BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
                       magFillPaint.setShader(shader);
 
                       invalidate();
+                  }
+
+                  private void autoDetectPaperBounds(Bitmap bmp) {
+                      int w = bmp.getWidth();
+                      int h = bmp.getHeight();
+                      
+                      float l = w * 0.15f, r = w * 0.85f, t = h * 0.15f, b = h * 0.85f;
+                      int downscale = Math.max(1, Math.min(w, h) / 150);
+                      int sw = w / downscale, sh = h / downscale;
+                      Bitmap small = Bitmap.createScaledBitmap(bmp, sw, sh, false);
+
+                      long totalBrightness = 0;
+                      int[] pixels = new int[sw * sh];
+                      small.getPixels(pixels, 0, sw, 0, 0, sw, sh);
+                      
+                      for (int c : pixels) {
+                          totalBrightness += (Color.red(c) + Color.green(c) + Color.blue(c)) / 3;
+                      }
+                      int avgBrightness = (int) (totalBrightness / pixels.length);
+                      int threshold = Math.min(255, avgBrightness + 25); 
+
+                      int minX = sw, maxX = 0, minY = sh, maxY = 0;
+                      boolean found = false;
+
+                      for (int y = 0; y < sh; y++) {
+                          for (int x = 0; x < sw; x++) {
+                              int c = pixels[y * sw + x];
+                              int bright = (Color.red(c) + Color.green(c) + Color.blue(c)) / 3;
+                              if (bright > threshold) {
+                                  if (x < minX) minX = x;
+                                  if (x > maxX) maxX = x;
+                                  if (y < minY) minY = y;
+                                  if (y > maxY) maxY = y;
+                                  found = true;
+                              }
+                          }
+                      }
+
+                      if (found && (maxX - minX > sw * 0.3) && (maxY - minY > sh * 0.3)) {
+                          l = minX * downscale;
+                          r = maxX * downscale;
+                          t = minY * downscale;
+                          b = maxY * downscale;
+                      }
+                      small.recycle();
+
+                      pts[0] = new PointF(l, t);
+                      pts[1] = new PointF((l + r) / 2f, t + (h * 0.02f)); 
+                      pts[2] = new PointF(r, t);
+                      pts[3] = new PointF(r, b);
+                      pts[4] = new PointF((l + r) / 2f, b - (h * 0.02f)); 
+                      pts[5] = new PointF(l, b);
                   }
 
                   @Override
@@ -425,8 +546,9 @@ jobs:
                           return;
                       }
 
+                      Bitmap displayBmp = (showingPreview && previewBitmap != null) ? previewBitmap : sourceBitmap;
                       float vw = getWidth(), vh = getHeight();
-                      float bw = sourceBitmap.getWidth(), bh = sourceBitmap.getHeight();
+                      float bw = displayBmp.getWidth(), bh = displayBmp.getHeight();
                       scale = Math.min(vw / bw, vh / bh) * 0.92f;
                       offsetX = (vw - bw * scale) / 2f;
                       offsetY = (vh - bh * scale) / 2f;
@@ -434,8 +556,10 @@ jobs:
                       canvas.save();
                       canvas.translate(offsetX, offsetY);
                       canvas.scale(scale, scale);
-                      canvas.drawBitmap(sourceBitmap, 0, 0, null);
+                      canvas.drawBitmap(displayBmp, 0, 0, null);
                       canvas.restore();
+                      
+                      if (showingPreview) return;
 
                       PointF[] scr = new PointF[6];
                       for (int i = 0; i < 6; i++) {
@@ -489,7 +613,7 @@ jobs:
 
                   @Override
                   public boolean onTouchEvent(MotionEvent event) {
-                      if (sourceBitmap == null) return false;
+                      if (sourceBitmap == null || showingPreview) return false;
                       float tx = (event.getX() - offsetX) / scale;
                       float ty = (event.getY() - offsetY) / scale;
 
