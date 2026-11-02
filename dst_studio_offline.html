@@ -1,0 +1,1395 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>流動端專用 Apple Pencil 電繡 DST 編輯與圖層工作室 (離線版)</title>
+  <style>
+    /* 基礎重設與暗色調配色 */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    :root {
+      --bg-main: #020617;
+      --bg-panel: rgba(15, 23, 42, 0.95);
+      --bg-card: rgba(30, 41, 59, 0.7);
+      --bg-card-hover: rgba(51, 65, 85, 0.8);
+      --border-color: rgba(51, 65, 85, 0.8);
+      --primary: #4f46e5;
+      --primary-hover: #6366f1;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-red: #e11d48;
+      --accent-amber: #f59e0b;
+      --accent-emerald: #10b981;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      height: 100vh;
+      width: 100vw;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+    /* 頂部導覽列 */
+    header {
+      background-color: #0f172a;
+      border-bottom: 1px solid #1e293b;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      z-index: 10;
+      flex-shrink: 0;
+    }
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .brand-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background-color: var(--primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 13px;
+      color: #fff;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+    .brand-title {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      color: #fff;
+    }
+    .brand-sub {
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s ease;
+      outline: none;
+    }
+    .btn:active {
+      transform: scale(0.96);
+    }
+    .btn-secondary {
+      background-color: #1e293b;
+      color: #e2e8f0;
+      border-color: #334155;
+    }
+    .btn-secondary:hover {
+      background-color: #334155;
+    }
+    .btn-primary {
+      background-color: var(--primary);
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background-color: var(--primary-hover);
+    }
+
+    /* 主區域 */
+    main {
+      flex: 1;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background-color: #020617;
+    }
+    @media (min-width: 768px) {
+      main {
+        flex-direction: row;
+      }
+    }
+
+    /* 畫布核心區 */
+    #canvasContainer {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #020617;
+    }
+    canvas {
+      touch-action: none;
+      cursor: crosshair;
+    }
+    #statusToast {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: rgba(79, 70, 229, 0.95);
+      color: #fff;
+      font-size: 12px;
+      padding: 5px 14px;
+      border-radius: 9999px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      pointer-events: none;
+      z-index: 30;
+      font-weight: 500;
+      transition: opacity 0.2s ease;
+    }
+    .hidden {
+      display: none !important;
+    }
+
+    /* 浮動工具列 */
+    .floating-toolbar {
+      position: absolute;
+      bottom: 12px;
+      left: 12px;
+      right: 12px;
+      background-color: rgba(15, 23, 42, 0.92);
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(51, 65, 85, 0.8);
+      border-radius: 16px;
+      padding: 6px 10px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.6);
+      z-index: 20;
+      font-size: 12px;
+    }
+    .mode-btn-group, .action-btn-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .tool-btn {
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s ease;
+      background-color: #1e293b;
+      color: #94a3b8;
+    }
+    .tool-btn:active {
+      transform: scale(0.95);
+    }
+    .tool-btn.active {
+      background-color: var(--primary);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.4);
+    }
+    .tool-btn-amber {
+      color: #fcd34d;
+    }
+
+    /* 右側控制面板 */
+    aside {
+      width: 100%;
+      background-color: var(--bg-panel);
+      border-top: 1px solid #1e293b;
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      gap: 12px;
+      overflow-y: auto;
+      max-height: 48vh;
+      flex-shrink: 0;
+      z-index: 10;
+    }
+    @media (min-width: 768px) {
+      aside {
+        width: 320px;
+        border-top: none;
+        border-left: 1px solid #1e293b;
+        max-height: none;
+      }
+    }
+    .panel-card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .panel-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #f1f5f9;
+    }
+    .badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+    .badge-indigo {
+      background-color: rgba(99, 102, 241, 0.2);
+      color: #a5b4fc;
+    }
+    .badge-emerald {
+      background-color: rgba(16, 185, 129, 0.2);
+      color: #6ee7b7;
+    }
+    .panel-hint {
+      font-size: 10px;
+      color: #94a3b8;
+    }
+
+    /* 圖層項目列表 */
+    #layersList {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 130px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+    .layer-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(51, 65, 85, 0.6);
+      background-color: rgba(15, 23, 42, 0.8);
+      font-size: 12px;
+      transition: all 0.15s ease;
+    }
+    .layer-item.active {
+      background-color: rgba(49, 46, 129, 0.4);
+      border-color: var(--primary);
+    }
+    .layer-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      flex: 1;
+      overflow: hidden;
+    }
+    .layer-color-picker {
+      width: 20px;
+      height: 20px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      background: transparent;
+      padding: 0;
+      flex-shrink: 0;
+    }
+    .layer-name {
+      color: #e2e8f0;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .layer-stitches {
+      color: #64748b;
+      font-family: monospace;
+      font-size: 11px;
+    }
+    .layer-ctrls {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .btn-icon {
+      padding: 3px 6px;
+      border-radius: 6px;
+      background-color: #1e293b;
+      color: #94a3b8;
+      border: none;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .btn-icon:hover {
+      background-color: #334155;
+    }
+    .btn-del {
+      color: #fb7185;
+    }
+    .btn-del:hover {
+      color: #fda4af;
+      background-color: rgba(225, 29, 72, 0.2);
+    }
+    .btn-vis-on {
+      background-color: var(--primary);
+      color: #fff;
+    }
+    .btn-vis-off {
+      background-color: #1e293b;
+      color: #64748b;
+    }
+
+    /* 筆刷按鈕格狀排列 */
+    .brush-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      font-size: 12px;
+    }
+    .brush-btn {
+      padding: 8px 10px;
+      border-radius: 10px;
+      background-color: #1e293b;
+      color: #cbd5e1;
+      border: 1px solid transparent;
+      text-align: left;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .brush-btn:hover {
+      background-color: #334155;
+    }
+    .brush-btn.active {
+      background-color: var(--primary);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.4);
+    }
+
+    /* 控制項與滑桿 */
+    .control-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .control-label-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+    }
+    .control-label {
+      color: var(--text-muted);
+    }
+    .control-val {
+      color: #f1f5f9;
+      font-family: monospace;
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--primary-hover);
+      cursor: pointer;
+    }
+    .toggle-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border-top: 1px solid rgba(51, 65, 85, 0.5);
+      padding-top: 8px;
+      margin-top: 4px;
+    }
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .toggle-label input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--primary-hover);
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 頂部導覽列 -->
+  <header>
+    <div class="header-brand">
+      <div class="brand-icon">繡</div>
+      <div>
+        <div class="brand-title">DST 筆刷、圖層與刺繡順序工作室 (離線版)</div>
+        <div class="brand-sub">純本地運行 · 支援 Wilcom 級路徑重採樣 · 點編輯 · 穩健歷史紀錄</div>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <label class="btn btn-secondary">
+        📂 匯入
+        <input type="file" id="dstFileInput" accept=".dst" style="display:none;">
+      </label>
+      <button id="exportDstBtn" class="btn btn-primary">
+        💾 匯出 DST
+      </button>
+    </div>
+  </header>
+
+  <!-- 主操作區 -->
+  <main>
+    
+    <!-- 畫布核心區 -->
+    <div id="canvasContainer">
+      <canvas id="stitchCanvas"></canvas>
+      
+      <div id="statusToast" class="hidden"></div>
+
+      <!-- 浮動工具列 -->
+      <div class="floating-toolbar">
+        <div class="mode-btn-group">
+          <button id="modeSelectBtn" class="tool-btn active">🖐️ 瀏覽</button>
+          <button id="modeDrawBtn" class="tool-btn">✏️ 筆刷</button>
+          <button id="modeEraseBtn" class="tool-btn">🧽 擦除</button>
+          <button id="modeEditBtn" class="tool-btn tool-btn-amber">🪡 點編輯</button>
+        </div>
+
+        <div class="action-btn-group">
+          <span id="statStitches" style="font-size:11px; color:#94a3b8; font-family:monospace; margin-right:4px;">0 針</span>
+          <button id="undoBtn" class="tool-btn">↩️ 復原</button>
+          <button id="redoBtn" class="tool-btn">↪️ 重做</button>
+          <button id="resetViewBtn" class="tool-btn">🔍 置中</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右側控制面板 (包含圖層與刺繡順序管理) -->
+    <aside>
+      
+      <!-- 圖層與刺繡順序管理區 -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span class="panel-title">📑 刺繡圖層 (Stitch Layers)</span>
+          <span class="badge badge-indigo">上方先生產</span>
+        </div>
+        <p class="panel-hint">透過上下按鈕調整順序，或隱藏圖層。</p>
+        <div id="layersList"></div>
+        <button id="addLayerBtn" class="btn btn-secondary" style="width:100%; font-size:12px; padding:6px;">
+          ➕ 新增色彩圖層
+        </button>
+      </div>
+
+      <!-- 筆刷與針跡設定 -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span class="panel-title">🧵 針跡筆刷種類 (Stitch Brushes)</span>
+        </div>
+        <div class="brush-grid">
+          <button data-brush="satin" class="brush-btn active">✨ 密度緞紋 (Satin)</button>
+          <button data-brush="zigzag" class="brush-btn">⚡ Z字形 (Zigzag)</button>
+          <button data-brush="running" class="brush-btn">〰️ 標準平針 (Running)</button>
+          <button data-brush="triple" class="brush-btn">🪡 三重線 (Triple)</button>
+        </div>
+      </div>
+
+      <!-- 筆刷密度與 Apple Pencil 壓感設定 -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span class="panel-title">🎛️ 筆刷跨距與視圖控制</span>
+          <span class="badge badge-emerald">支援重採樣</span>
+        </div>
+
+        <div class="control-row">
+          <div class="control-label-row">
+            <span class="control-label">針跡擺幅跨距 (Stitch Span)</span>
+            <span id="brushWidthLabel" class="control-val">2.0 mm</span>
+          </div>
+          <input type="range" id="brushWidth" min="0.5" max="8.0" step="0.5" value="2.0">
+        </div>
+
+        <div class="control-row">
+          <div class="control-label-row">
+            <span class="control-label">針跡密度 / 步距 (Density)</span>
+            <span id="brushDensityLabel" class="control-val">0.5 mm</span>
+          </div>
+          <input type="range" id="brushDensity" min="0.2" max="1.5" step="0.1" value="0.5">
+        </div>
+
+        <div class="toggle-list">
+          <label class="toggle-label" style="color: #cbd5e1;">
+            <input type="checkbox" id="pencilPressureToggle" checked> 啟用 Apple Pencil 壓感改變跨距
+          </label>
+          <label class="toggle-label" style="color: #93c5fd;">
+            <input type="checkbox" id="autoUnderlayToggle" checked> 🧵 自動打中心底線 (Auto Underlay)
+          </label>
+          <label class="toggle-label" style="color: #fde047;">
+            <input type="checkbox" id="showPointsToggle"> 📍 顯示落針點 (Stitch Points)
+          </label>
+          <label class="toggle-label" style="color: #a5b4fc;">
+            <input type="checkbox" id="extremeThinToggle" checked> 📏 極幼縫線檢視模式
+          </label>
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <script>
+    // ---------------------------------------------------------
+    // 核心資料狀態管理
+    // ---------------------------------------------------------
+    let layers = [
+      { id: 1, name: '圖層 1 (主色)', color: '#E11D48', visible: true, stitches: [] },
+      { id: 2, name: '圖層 2 (輔色)', color: '#2563EB', visible: true, stitches: [] }
+    ];
+    let activeLayerId = 1;
+
+    let historyStack = [];
+    let redoStack = [];
+    
+    let appMode = 'select'; // 'select', 'draw', 'erase', 'edit'
+    let activeBrush = 'satin';
+    let brushWidthMm = 2.0;
+    let brushDensityMm = 0.5;
+    
+    let usePressure = true;
+    let showStitchPoints = false;
+    let useExtremeThin = true;
+    let useAutoUnderlay = true; 
+
+    const eraserRadiusMm = 2.0; 
+
+    const canvas = document.getElementById('stitchCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    let viewScale = 1.5;
+    let viewOffsetX = 0;
+    let viewOffsetY = 0;
+
+    let pointers = new Map();
+    let lastPanX = 0, lastPanY = 0;
+    let initialPinchDist = null;
+    let initialScale = 1.5;
+
+    let isInteracting = false; 
+    let hasModifiedDuringInteraction = false;
+    let currentPath = []; 
+    let dragStitchRef = null; 
+
+    function showToast(msg, duration = 2000) {
+      const el = document.getElementById('statusToast');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      clearTimeout(el._timer);
+      el._timer = setTimeout(() => el.classList.add('hidden'), duration);
+    }
+
+    // ---------------------------------------------------------
+    // 歷史紀錄管理 (Undo/Redo) - 穩健版
+    // ---------------------------------------------------------
+    function cloneLayers(targetLayers) {
+      return targetLayers.map(layer => ({
+        id: layer.id,
+        name: layer.name,
+        color: layer.color,
+        visible: layer.visible,
+        stitches: layer.stitches.map(s => ({...s}))
+      }));
+    }
+
+    function saveHistory() {
+      if (historyStack.length > 30) historyStack.shift();
+      historyStack.push(cloneLayers(layers));
+      redoStack = [];
+    }
+
+    function undoAction() {
+      if (historyStack.length === 0) {
+        showToast('已經是最原始狀態');
+        return;
+      }
+      redoStack.push(cloneLayers(layers));
+      layers = historyStack.pop();
+      updateUI();
+      renderCanvas();
+      showToast('已復原上一步');
+    }
+
+    function redoAction() {
+      if (redoStack.length === 0) {
+        showToast('沒有可重做的動作');
+        return;
+      }
+      historyStack.push(cloneLayers(layers));
+      layers = redoStack.pop();
+      updateUI();
+      renderCanvas();
+      showToast('已重做下一步');
+    }
+
+    function getTotalStitchesCount() {
+      return layers.reduce((acc, l) => acc + l.stitches.length, 0);
+    }
+
+    // ---------------------------------------------------------
+    // .DST 解析與匯出
+    // ---------------------------------------------------------
+    function parseDST(arrayBuffer) {
+      const bytes = new Uint8Array(arrayBuffer);
+      if (bytes.length < 515) {
+        alert('檔案過小，不是有效的 Tajima .DST 檔案');
+        return;
+      }
+
+      saveHistory();
+
+      const parsedStitches = [];
+      let curX = 0, curY = 0;
+      let currentLayerIdx = 0;
+
+      for (let i = 512; i + 2 < bytes.length; i += 3) {
+        const b0 = bytes[i], b1 = bytes[i + 1], b2 = bytes[i + 2];
+        if (b0 === 0x00 && b1 === 0x00 && b2 === 0xF3) break;
+
+        let dx = 0, dy = 0;
+        if (b0 & 0x01) dx += 1;  if (b0 & 0x02) dx -= 1;
+        if (b0 & 0x04) dx += 9;  if (b0 & 0x08) dx -= 9;
+        if (b0 & 0x80) dy += 1;  if (b0 & 0x40) dy -= 1;
+        if (b0 & 0x20) dy += 9;  if (b0 & 0x10) dy -= 9;
+
+        if (b1 & 0x01) dx += 3;  if (b1 & 0x02) dx -= 3;
+        if (b1 & 0x04) dx += 27; if (b1 & 0x08) dx -= 27;
+        if (b1 & 0x80) dy += 3;  if (b1 & 0x40) dy -= 3;
+        if (b1 & 0x20) dy += 27; if (b1 & 0x10) dy -= 27;
+
+        if (b2 & 0x04) dx += 81; if (b2 & 0x08) dx -= 81;
+        if (b2 & 0x20) dy += 81; if (b2 & 0x10) dy -= 81;
+
+        const isJump = (b2 & 0x80) !== 0;
+        const isColorChange = (b2 & 0x40) !== 0;
+
+        curX += dx;
+        curY -= dy;
+
+        if (isColorChange) {
+          currentLayerIdx++;
+        } else {
+          parsedStitches.push({ x: curX, y: curY, type: isJump ? 'JUMP' : 'NORMAL', layerIdx: currentLayerIdx });
+        }
+      }
+
+      const newLayers = [];
+      const palettes = ['#E11D48', '#2563EB', '#16A34A', '#D97706', '#9333EA', '#FACC15', '#F8FAFC'];
+      
+      for (let idx = 0; idx <= currentLayerIdx; idx++) {
+        const sList = parsedStitches.filter(s => s.layerIdx === idx);
+        if (sList.length > 0 || idx === 0) {
+          newLayers.push({
+            id: Date.now() + idx,
+            name: `匯入圖層 #${idx + 1}`,
+            color: palettes[idx % palettes.length],
+            visible: true,
+            stitches: sList
+          });
+        }
+      }
+
+      layers = newLayers;
+      activeLayerId = layers[0].id;
+      updateUI();
+      centerView();
+      showToast(`成功讀取 DST 檔案：共 ${getTotalStitchesCount()} 針，${layers.length} 個圖層`);
+    }
+
+    function decomposeTernary(val) {
+      const weights = [81, 27, 9, 3, 1];
+      const maxRem = [40, 13, 4, 1, 0];
+      const digits = [0, 0, 0, 0, 0];
+      let rem = Math.max(-121, Math.min(121, Math.round(val)));
+      for (let i = 0; i < 5; i++) {
+        if (rem > maxRem[i]) { digits[i] = 1; rem -= weights[i]; }
+        else if (rem < -maxRem[i]) { digits[i] = -1; rem += weights[i]; }
+      }
+      return { w81: digits[0], w27: digits[1], w9: digits[2], w3: digits[3], w1: digits[4] };
+    }
+
+    function encodeSingleRecord(dx, dy, type) {
+      const tx = decomposeTernary(dx);
+      const ty = decomposeTernary(dy);
+      let b0 = 0, b1 = 0, b2 = 0x03;
+      if (tx.w1 === 1) b0 |= 0x01; else if (tx.w1 === -1) b0 |= 0x02;
+      if (tx.w9 === 1) b0 |= 0x04; else if (tx.w9 === -1) b0 |= 0x08;
+      if (ty.w1 === 1) b0 |= 0x80; else if (ty.w1 === -1) b0 |= 0x40;
+      if (ty.w9 === 1) b0 |= 0x20; else if (ty.w9 === -1) b0 |= 0x10;
+      if (tx.w3 === 1) b1 |= 0x01; else if (tx.w3 === -1) b1 |= 0x02;
+      if (tx.w27 === 1) b1 |= 0x04; else if (tx.w27 === -1) b1 |= 0x08;
+      if (ty.w3 === 1) b1 |= 0x80; else if (ty.w3 === -1) b1 |= 0x40;
+      if (ty.w27 === 1) b1 |= 0x20; else if (ty.w27 === -1) b1 |= 0x10;
+      if (tx.w81 === 1) b2 |= 0x04; else if (tx.w81 === -1) b2 |= 0x08;
+      if (ty.w81 === 1) b2 |= 0x20; else if (ty.w81 === -1) b2 |= 0x10;
+      if (type === 'JUMP') b2 |= 0x80;
+      else if (type === 'COLOR_CHANGE') b2 |= 0xC0;
+      return [b0, b1, b2];
+    }
+
+    function exportDST() {
+      const activeLayers = layers.filter(l => l.visible && l.stitches.length > 0);
+      if (activeLayers.length === 0) {
+        alert('沒有可匯出的可見圖層與針跡！');
+        return;
+      }
+
+      const records = [];
+      let prevX = 0, prevY = 0;
+      let colorCount = 0;
+
+      activeLayers.forEach((layer, lIdx) => {
+        if (lIdx > 0) {
+          colorCount++;
+          records.push([0x00, 0x00, 0xC3]);
+        }
+        for (const s of layer.stitches) {
+          const tx = Math.round(s.x), ty = Math.round(s.y);
+          let remX = tx - prevX;
+          let remY = -(ty - prevY);
+          while (Math.abs(remX) > 121 || Math.abs(remY) > 121) {
+            const sx = Math.max(-121, Math.min(121, remX));
+            const sy = Math.max(-121, Math.min(121, remY));
+            records.push(encodeSingleRecord(sx, sy, 'JUMP'));
+            remX -= sx; remY -= sy;
+          }
+          records.push(encodeSingleRecord(remX, remY, s.type));
+          prevX = tx; prevY = ty;
+        }
+      });
+      records.push([0x00, 0x00, 0xF3]);
+
+      const header = new Uint8Array(512);
+      header.fill(0x20);
+      const headerText = `LA:LAYERED_STUDIO  
+ST:${String(records.length).padStart(7, ' ')}
+CO:${String(colorCount).padStart(3, ' ')}
+`;
+      for (let i = 0; i < headerText.length && i < 511; i++) header[i] = headerText.charCodeAt(i);
+      header[511] = 0x1A;
+
+      const out = new Uint8Array(512 + records.length * 3);
+      out.set(header, 0);
+      records.forEach((rec, idx) => out.set(rec, 512 + idx * 3));
+
+      const blob = new Blob([out], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `layered_embroidery_${Date.now()}.dst`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('已依照圖層順序成功匯出 .DST 檔案！');
+    }
+
+    // ---------------------------------------------------------
+    // 工具：橡皮擦
+    // ---------------------------------------------------------
+    function eraseStitches(x, y) {
+      const activeLayer = layers.find(l => l.id === activeLayerId);
+      if (!activeLayer || !activeLayer.visible) return;
+
+      const eraseRadiusDstUnits = eraserRadiusMm * 10;
+      
+      const newStitches = activeLayer.stitches.filter(s => {
+        const dist = Math.hypot(s.x - x, s.y - y);
+        return dist > eraseRadiusDstUnits;
+      });
+
+      if (newStitches.length !== activeLayer.stitches.length) {
+        activeLayer.stitches = newStitches;
+        hasModifiedDuringInteraction = true;
+      }
+    }
+
+    // ---------------------------------------------------------
+    // 工具：筆刷核心與路徑重採樣
+    // ---------------------------------------------------------
+    function resamplePath(path, stepLength) {
+      if (path.length < 2) return path;
+      let resampled = [{...path[0]}];
+      let currentIdx = 0;
+      let distRemaining = stepLength;
+
+      let p1 = path[0];
+      let p2 = path[1];
+      let distSegment = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+
+      while (currentIdx < path.length - 1) {
+        if (distRemaining <= distSegment) {
+          let t = distRemaining / distSegment;
+          let nx = p1.x + (p2.x - p1.x) * t;
+          let ny = p1.y + (p2.y - p1.y) * t;
+          let np = p1.p + (p2.p - p1.p) * t;
+          
+          let newPt = {x: nx, y: ny, p: np};
+          resampled.push(newPt);
+          
+          p1 = newPt; 
+          distSegment = Math.hypot(p2.x - p1.x, p2.y - p1.y); 
+          distRemaining = stepLength;
+        } else {
+          distRemaining -= distSegment;
+          currentIdx++;
+          if (currentIdx < path.length - 1) {
+            p1 = path[currentIdx];
+            p2 = path[currentIdx + 1];
+            distSegment = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+          }
+        }
+      }
+      return resampled;
+    }
+
+    function computeStitchesFromPath(path) {
+      const densityStep = brushDensityMm * 10;
+      const resampled = resamplePath(path, densityStep);
+      if (resampled.length < 2) return [];
+
+      const tempStitches = [];
+      
+      if ((activeBrush === 'satin' || activeBrush === 'zigzag') && useAutoUnderlay) {
+         const underlayStep = 25; 
+         const underlayPath = resamplePath(path, underlayStep);
+         for(let i=0; i<underlayPath.length; i++) {
+             tempStitches.push({ x: underlayPath[i].x, y: underlayPath[i].y, type: i===0 ? 'JUMP' : 'NORMAL' });
+         }
+         tempStitches.push({x: resampled[0].x, y: resampled[0].y, type: 'JUMP'});
+      }
+
+      if (activeBrush === 'running') {
+        for (let i = 0; i < resampled.length; i++) {
+          tempStitches.push({ x: resampled[i].x, y: resampled[i].y, type: i===0 ? 'JUMP' : 'NORMAL' });
+        }
+      } else if (activeBrush === 'triple') {
+        tempStitches.push({ x: resampled[0].x, y: resampled[0].y, type: 'JUMP' });
+        for (let i = 1; i < resampled.length; i++) {
+          tempStitches.push({ x: resampled[i].x, y: resampled[i].y, type: 'NORMAL' }); 
+          tempStitches.push({ x: resampled[i-1].x, y: resampled[i-1].y, type: 'NORMAL' }); 
+          tempStitches.push({ x: resampled[i].x, y: resampled[i].y, type: 'NORMAL' }); 
+        }
+      } else if (activeBrush === 'zigzag' || activeBrush === 'satin') {
+        for (let i = 0; i < resampled.length; i++) {
+          let pt = resampled[i];
+          let nx = 0, ny = 0;
+          if (i < resampled.length - 1) {
+            nx = resampled[i+1].x - pt.x;
+            ny = resampled[i+1].y - pt.y;
+          } else if (i > 0) {
+            nx = pt.x - resampled[i-1].x;
+            ny = pt.y - resampled[i-1].y;
+          }
+          let len = Math.hypot(nx, ny);
+          let normX = len === 0 ? 0 : -ny / len;
+          let normY = len === 0 ? 0 : nx / len;
+          let effectiveWidth = usePressure ? brushWidthMm * 10 * (0.4 + pt.p * 1.2) : brushWidthMm * 10;
+          let halfW = effectiveWidth / 2;
+          let side = (i % 2 === 0) ? 1 : -1;
+          
+          if (activeBrush === 'satin') {
+              tempStitches.push({ x: pt.x + normX * halfW, y: pt.y + normY * halfW, type: i===0 ? 'JUMP' : 'NORMAL' });
+              tempStitches.push({ x: pt.x - normX * halfW, y: pt.y - normY * halfW, type: 'NORMAL' });
+          } else {
+              tempStitches.push({ x: pt.x + normX * halfW * side, y: pt.y + normY * halfW * side, type: i===0 ? 'JUMP' : 'NORMAL' });
+          }
+        }
+      }
+      return tempStitches;
+    }
+
+    // ---------------------------------------------------------
+    // 畫布與網格渲染
+    // ---------------------------------------------------------
+    function resizeCanvas() {
+      const rect = document.getElementById('canvasContainer').getBoundingClientRect();
+      canvas.width = rect.width * window.devicePixelRatio;
+      canvas.height = rect.height * window.devicePixelRatio;
+      canvas.style.width = rect.width + 'px';
+      canvas.style.height = rect.height + 'px';
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+      renderCanvas();
+    }
+
+    function centerView() {
+      const rect = document.getElementById('canvasContainer').getBoundingClientRect();
+      viewOffsetX = rect.width / 2;
+      viewOffsetY = rect.height / 2;
+      renderCanvas();
+    }
+
+    function renderCanvas() {
+      const rect = document.getElementById('canvasContainer').getBoundingClientRect();
+      ctx.clearRect(0, 0, rect.width, rect.height);
+
+      ctx.save();
+      ctx.translate(viewOffsetX, viewOffsetY);
+      ctx.scale(viewScale, viewScale);
+
+      const smallGrid = 100;
+      const largeGrid = 500;
+
+      // 1cm 細格線
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.15)';
+      ctx.lineWidth = 1 / viewScale;
+      for (let x = -2500; x <= 2500; x += smallGrid) {
+        ctx.beginPath(); ctx.moveTo(x, -2500); ctx.lineTo(x, 2500); ctx.stroke();
+      }
+      for (let y = -2500; y <= 2500; y += smallGrid) {
+        ctx.beginPath(); ctx.moveTo(-2500, y); ctx.lineTo(2500, y); ctx.stroke();
+      }
+
+      // 5cm 主格線與刻度
+      ctx.strokeStyle = 'rgba(99, 102, 241, 0.4)';
+      ctx.lineWidth = 2 / viewScale;
+      ctx.font = `${11/viewScale}px sans-serif`;
+      ctx.fillStyle = 'rgba(165, 180, 252, 0.8)';
+
+      for (let x = -2500; x <= 2500; x += largeGrid) {
+        ctx.beginPath(); ctx.moveTo(x, -2500); ctx.lineTo(x, 2500); ctx.stroke();
+        if (x !== 0) ctx.fillText(`${x/100} cm`, x + 4/viewScale, 14/viewScale);
+      }
+      for (let y = -2500; y <= 2500; y += largeGrid) {
+        ctx.beginPath(); ctx.moveTo(-2500, y); ctx.lineTo(2500, y); ctx.stroke();
+        if (y !== 0) ctx.fillText(`${-y/100} cm`, 4/viewScale, y - 4/viewScale);
+      }
+
+      // 參考框
+      ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
+      ctx.lineWidth = 1.5 / viewScale;
+      ctx.strokeRect(-500, -500, 1000, 1000);
+      ctx.beginPath();
+      ctx.moveTo(-550, 0); ctx.lineTo(550, 0);
+      ctx.moveTo(0, -550); ctx.lineTo(0, 550);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.8)';
+      ctx.fillText("0 cm", 4/viewScale, 14/viewScale);
+
+      layers.forEach(layer => drawStitchLayer(layer, false));
+      
+      // 即時預覽
+      if (appMode === 'draw' && isInteracting && currentPath.length > 1) {
+          const previewStitches = computeStitchesFromPath(currentPath);
+          const previewLayer = { visible: true, color: 'rgba(236, 72, 153, 0.85)', stitches: previewStitches };
+          drawStitchLayer(previewLayer, true);
+      }
+      
+      // 橡皮擦紅圈
+      if (appMode === 'erase' && isInteracting && currentPath.length > 0) {
+        let lastPt = currentPath[currentPath.length - 1];
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
+        ctx.lineWidth = 2.0 / viewScale;
+        ctx.beginPath();
+        ctx.arc(lastPt.x, lastPt.y, eraserRadiusMm * 10, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    function drawStitchLayer(layer, isPreview) {
+      if (!layer.visible || layer.stitches.length === 0) return;
+      let prev = null;
+      let isEditingActive = (appMode === 'edit' && layer.id === activeLayerId);
+
+      for (const s of layer.stitches) {
+        if (prev && s.type !== 'JUMP') {
+          ctx.beginPath();
+          ctx.moveTo(prev.x, prev.y);
+          ctx.lineTo(s.x, s.y);
+          ctx.lineCap = 'round';
+
+          ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+          ctx.lineWidth = useExtremeThin ? 1.5 / viewScale : 4.0 / viewScale; 
+          ctx.stroke();
+
+          ctx.strokeStyle = layer.color;
+          ctx.lineWidth = useExtremeThin ? 0.8 / viewScale : 2.5 / viewScale; 
+          ctx.stroke();
+        }
+        prev = s;
+      }
+
+      if (!isPreview && (showStitchPoints || isEditingActive)) {
+        for (let i = 0; i < layer.stitches.length; i++) {
+          const s = layer.stitches[i];
+          if (s.type !== 'JUMP') {
+            let isBeingDragged = (dragStitchRef && dragStitchRef.layerId === layer.id && dragStitchRef.stitchIdx === i);
+            ctx.fillStyle = isBeingDragged ? '#22c55e' : '#ffffff';
+            ctx.strokeStyle = isBeingDragged ? '#14532d' : '#000000';
+            ctx.lineWidth = 0.5 / viewScale;
+            ctx.beginPath();
+            ctx.arc(s.x, s.y, isBeingDragged ? 3.0 / viewScale : 1.8 / viewScale, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
+      }
+    }
+
+    function updateUI() {
+      document.getElementById('statStitches').textContent = `${getTotalStitchesCount().toLocaleString()} 針`;
+      
+      const listEl = document.getElementById('layersList');
+      listEl.innerHTML = '';
+      
+      layers.forEach((layer, idx) => {
+        const isActive = layer.id === activeLayerId;
+        const row = document.createElement('div');
+        row.className = `layer-item ${isActive ? 'active' : ''}`;
+        row.innerHTML = `
+          <div class="layer-meta select-layer" data-id="${layer.id}">
+            <input type="color" value="${layer.color}" data-id="${layer.id}" class="layer-color-picker">
+            <span class="layer-name">${layer.name}</span>
+            <span class="layer-stitches">(${layer.stitches.length}針)</span>
+          </div>
+          <div class="layer-ctrls">
+            <button data-id="${layer.id}" class="btn-icon move-up-btn" title="往上移">⬆️</button>
+            <button data-id="${layer.id}" class="btn-icon move-down-btn" title="往下移">⬇️</button>
+            <button data-id="${layer.id}" class="btn-icon toggle-vis-btn ${layer.visible ? 'btn-vis-on' : 'btn-vis-off'}">${layer.visible ? '顯示' : '隱藏'}</button>
+            <button data-id="${layer.id}" class="btn-icon btn-del delete-layer-btn">🗑️</button>
+          </div>
+        `;
+        listEl.appendChild(row);
+      });
+
+      listEl.querySelectorAll('.select-layer').forEach(el => {
+        el.addEventListener('click', (e) => {
+          activeLayerId = parseInt(e.currentTarget.dataset.id, 10);
+          updateUI();
+          renderCanvas();
+        });
+      });
+
+      listEl.querySelectorAll('.layer-color-picker').forEach(inp => {
+        inp.addEventListener('input', (e) => {
+          saveHistory();
+          const id = parseInt(e.target.dataset.id, 10);
+          const layer = layers.find(l => l.id === id);
+          if (layer) { layer.color = e.target.value; renderCanvas(); }
+        });
+      });
+
+      listEl.querySelectorAll('.toggle-vis-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          saveHistory();
+          const id = parseInt(e.target.dataset.id, 10);
+          const layer = layers.find(l => l.id === id);
+          if (layer) { layer.visible = !layer.visible; updateUI(); renderCanvas(); }
+        });
+      });
+
+      listEl.querySelectorAll('.move-up-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const id = parseInt(e.target.dataset.id, 10);
+          const index = layers.findIndex(l => l.id === id);
+          if (index > 0) {
+            saveHistory();
+            const temp = layers[index];
+            layers[index] = layers[index - 1];
+            layers[index - 1] = temp;
+            updateUI(); renderCanvas();
+          }
+        });
+      });
+
+      listEl.querySelectorAll('.move-down-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const id = parseInt(e.target.dataset.id, 10);
+          const index = layers.findIndex(l => l.id === id);
+          if (index < layers.length - 1) {
+            saveHistory();
+            const temp = layers[index];
+            layers[index] = layers[index + 1];
+            layers[index + 1] = temp;
+            updateUI(); renderCanvas();
+          }
+        });
+      });
+
+      listEl.querySelectorAll('.delete-layer-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const id = parseInt(e.target.dataset.id, 10);
+          if (layers.length <= 1) {
+            alert('至少需保留一個圖層！');
+            return;
+          }
+          saveHistory();
+          layers = layers.filter(l => l.id !== id);
+          if (activeLayerId === id) activeLayerId = layers[0].id;
+          updateUI(); renderCanvas();
+        });
+      });
+    }
+
+    function changeAppMode(mode) {
+      appMode = mode;
+      
+      const selectBtn = document.getElementById('modeSelectBtn');
+      const drawBtn = document.getElementById('modeDrawBtn');
+      const eraseBtn = document.getElementById('modeEraseBtn');
+      const editBtn = document.getElementById('modeEditBtn');
+
+      [selectBtn, drawBtn, eraseBtn, editBtn].forEach(b => b.classList.remove('active'));
+
+      if (mode === 'select') { selectBtn.classList.add('active'); showToast('切換至：瀏覽與縮放模式'); }
+      if (mode === 'draw') { drawBtn.classList.add('active'); showToast('切換至：筆刷繪畫模式'); }
+      if (mode === 'erase') { eraseBtn.classList.add('active'); showToast('切換至：橡皮擦模式'); }
+      if (mode === 'edit') { editBtn.classList.add('active'); showToast('切換至：點編輯模式 (可拖曳單一針跡)'); }
+      
+      renderCanvas(); 
+    }
+
+    // ---------------------------------------------------------
+    // 指標事件監聽
+    // ---------------------------------------------------------
+    const container = document.getElementById('canvasContainer');
+
+    container.addEventListener('pointerdown', (e) => {
+      pointers.set(e.pointerId, e);
+
+      if (pointers.size === 1) {
+        const rect = canvas.getBoundingClientRect();
+        const curX = (e.clientX - rect.left - viewOffsetX) / viewScale;
+        const curY = (e.clientY - rect.top - viewOffsetY) / viewScale;
+        const pressure = e.pressure > 0 ? e.pressure : 0.5;
+
+        if (appMode === 'draw') {
+            isInteracting = true;
+            hasModifiedDuringInteraction = false;
+            currentPath = [{x: curX, y: curY, p: pressure}];
+        } else if (appMode === 'erase') {
+            isInteracting = true;
+            hasModifiedDuringInteraction = false;
+            saveHistory(); 
+            currentPath = [{x: curX, y: curY, p: pressure}];
+            eraseStitches(curX, curY);
+            renderCanvas();
+        } else if (appMode === 'edit') {
+            let minDist = 15 / viewScale; 
+            let closest = null;
+            let layer = layers.find(l => l.id === activeLayerId);
+            if(layer && layer.visible) {
+                for(let i=0; i<layer.stitches.length; i++) {
+                    let s = layer.stitches[i];
+                    let d = Math.hypot(s.x - curX, s.y - curY);
+                    if(d < minDist) {
+                        minDist = d;
+                        closest = i;
+                    }
+                }
+            }
+            if (closest !== null) {
+                saveHistory();
+                hasModifiedDuringInteraction = true; 
+                dragStitchRef = { layerId: activeLayerId, stitchIdx: closest };
+                isInteracting = true;
+                renderCanvas(); 
+            }
+        }
+      } else if (pointers.size === 2) {
+        isInteracting = false;
+        const pts = Array.from(pointers.values());
+        initialPinchDist = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+        initialScale = viewScale;
+      }
+    });
+
+    container.addEventListener('pointermove', (e) => {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, e);
+
+      if (isInteracting && pointers.size === 1) {
+        const rect = canvas.getBoundingClientRect();
+        const curX = (e.clientX - rect.left - viewOffsetX) / viewScale;
+        const curY = (e.clientY - rect.top - viewOffsetY) / viewScale;
+        const pressure = e.pressure > 0 ? e.pressure : 0.5;
+
+        if (appMode === 'draw') {
+          currentPath.push({x: curX, y: curY, p: pressure});
+          renderCanvas(); 
+        } else if (appMode === 'erase') {
+          currentPath.push({x: curX, y: curY, p: pressure});
+          eraseStitches(curX, curY);
+          renderCanvas(); 
+        } else if (appMode === 'edit' && dragStitchRef) {
+          let layer = layers.find(l => l.id === dragStitchRef.layerId);
+          layer.stitches[dragStitchRef.stitchIdx].x = curX;
+          layer.stitches[dragStitchRef.stitchIdx].y = curY;
+          renderCanvas();
+        }
+        
+      } else if (pointers.size === 2) {
+        const pts = Array.from(pointers.values());
+        const dist = Math.hypot(pts[0].clientX - pts[1].clientX, pts[0].clientY - pts[1].clientY);
+        if (initialPinchDist) {
+          viewScale = Math.max(0.1, Math.min(100, initialScale * (dist / initialPinchDist)));
+          renderCanvas();
+        }
+      } else if (appMode === 'select' && pointers.size === 1 && !isInteracting) {
+        const pt = pointers.values().next().value;
+        if (lastPanX !== 0 && lastPanY !== 0) {
+          viewOffsetX += pt.clientX - lastPanX;
+          viewOffsetY += pt.clientY - lastPanY;
+          renderCanvas();
+        }
+        lastPanX = pt.clientX;
+        lastPanY = pt.clientY;
+      }
+    });
+
+    function pointerUpHandler(e) {
+      pointers.delete(e.pointerId);
+      if (pointers.size < 2) initialPinchDist = null;
+      if (pointers.size === 0) {
+        if (isInteracting) {
+            if (appMode === 'draw' && currentPath.length > 1) {
+                const finalStitches = computeStitchesFromPath(currentPath);
+                if (finalStitches.length > 0) {
+                    saveHistory(); 
+                    const activeLayer = layers.find(l => l.id === activeLayerId);
+                    if (activeLayer && activeLayer.visible) {
+                        activeLayer.stitches.push(...finalStitches);
+                        hasModifiedDuringInteraction = true;
+                    }
+                }
+            } else if (appMode === 'erase' && !hasModifiedDuringInteraction) {
+                 historyStack.pop();
+            }
+            updateUI(); 
+        }
+        isInteracting = false;
+        currentPath = [];
+        dragStitchRef = null;
+        lastPanX = 0; lastPanY = 0;
+        renderCanvas(); 
+      }
+    }
+
+    container.addEventListener('pointerup', pointerUpHandler);
+    container.addEventListener('pointercancel', pointerUpHandler);
+
+    container.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.15 : 0.88;
+      viewScale = Math.max(0.1, Math.min(100, viewScale * factor));
+      renderCanvas();
+    }, { passive: false });
+
+    // ---------------------------------------------------------
+    // 綁定 UI 元素事件
+    // ---------------------------------------------------------
+    document.getElementById('modeSelectBtn').addEventListener('click', () => changeAppMode('select'));
+    document.getElementById('modeDrawBtn').addEventListener('click', () => changeAppMode('draw'));
+    document.getElementById('modeEraseBtn').addEventListener('click', () => changeAppMode('erase'));
+    document.getElementById('modeEditBtn').addEventListener('click', () => changeAppMode('edit'));
+
+    document.getElementById('undoBtn').addEventListener('click', undoAction);
+    document.getElementById('redoBtn').addEventListener('click', redoAction);
+    document.getElementById('resetViewBtn').addEventListener('click', centerView);
+
+    document.getElementById('addLayerBtn').addEventListener('click', () => {
+      saveHistory();
+      const palettes = ['#E11D48', '#2563EB', '#16A34A', '#D97706', '#9333EA', '#FACC15', '#0891B2'];
+      const newId = Date.now();
+      layers.push({
+        id: newId,
+        name: `圖層 #${layers.length + 1}`,
+        color: palettes[layers.length % palettes.length],
+        visible: true,
+        stitches: []
+      });
+      activeLayerId = newId;
+      updateUI();
+      renderCanvas();
+      showToast('已新增色彩圖層');
+    });
+
+    document.querySelectorAll('.brush-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        document.querySelectorAll('.brush-btn').forEach(b => b.classList.remove('active'));
+        e.currentTarget.classList.add('active');
+        activeBrush = e.currentTarget.dataset.brush;
+        showToast(`已選擇筆刷：${e.currentTarget.textContent}`);
+      });
+    });
+
+    document.getElementById('brushWidth').addEventListener('input', (e) => {
+      brushWidthMm = parseFloat(e.target.value);
+      document.getElementById('brushWidthLabel').textContent = `${brushWidthMm} mm`;
+    });
+    document.getElementById('brushDensity').addEventListener('input', (e) => {
+      brushDensityMm = parseFloat(e.target.value);
+      document.getElementById('brushDensityLabel').textContent = `${brushDensityMm} mm`;
+    });
+    document.getElementById('pencilPressureToggle').addEventListener('change', (e) => {
+      usePressure = e.target.checked;
+    });
+    
+    document.getElementById('autoUnderlayToggle').addEventListener('change', (e) => {
+      useAutoUnderlay = e.target.checked;
+      showToast(useAutoUnderlay ? '已開啟自動底線' : '已關閉自動底線');
+    });
+
+    document.getElementById('showPointsToggle').addEventListener('change', (e) => {
+      showStitchPoints = e.target.checked;
+      renderCanvas();
+      showToast(showStitchPoints ? '已顯示落針點' : '已隱藏落針點');
+    });
+    
+    document.getElementById('extremeThinToggle').addEventListener('change', (e) => {
+      useExtremeThin = e.target.checked;
+      renderCanvas();
+      showToast(useExtremeThin ? '開啟極幼縫線檢視' : '關閉極幼縫線檢視');
+    });
+
+    document.getElementById('dstFileInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => parseDST(ev.target.result);
+      reader.readAsArrayBuffer(file);
+    });
+    document.getElementById('exportDstBtn').addEventListener('click', exportDST);
+
+    window.addEventListener('resize', resizeCanvas);
+    window.addEventListener('DOMContentLoaded', () => {
+      resizeCanvas();
+      centerView();
+      updateUI();
+      showToast('歡迎使用圖層與刺繡順序工作室！');
+    });
+  </script>
+</body>
+</html>
